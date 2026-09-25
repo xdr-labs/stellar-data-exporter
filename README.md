@@ -1,176 +1,203 @@
-# Stellar Data Exporter
+<h1 align="center">Stellar Data Exporter</h1>
 
-A lightweight web UI for exporting Stellar Cyber query results as CSV or JSON.
+<p align="center">
+  <strong>Query Stellar Cyber raw data and export it safely to CSV, JSON, NDJSON, S3-compatible storage, or SFTP.</strong>
+</p>
 
-## Current MVP
+<p align="center">
+  A browser-based export utility for analysts, engineers, and administrators who need more control than a one-off API script.
+</p>
 
-The first working slice is intentionally small:
+<p align="center">
+  <a href="https://xdr.ooo/products/stellar-data-exporter">Product Page</a> ·
+  <a href="https://xdr.ooo/products/stellar-data-exporter-guide">User Guide</a> ·
+  <a href="https://github.com/xdr-labs/stellar-data-exporter/issues">Issues</a>
+</p>
 
-- no application login or user database
-- selectable Stellar Cyber credential type per browser session: Root Scope (account email + All-Access Token) or User Scope (API Key)
-- automatic exchange of either credential type for a short-lived JWT
-- automatic JWT refresh before expiry and one retry after HTTP 401
-- user-friendly multi-select data sources mapped internally to Stellar Cyber indices
-- user-supplied query conditions plus a live effective Elasticsearch request/DSL preview
-- explicit start/end time range reflected immediately in the effective DSL
-- readable connection/authentication/permission errors
-- query validation and 100-record preview
-- adaptive time slicing for large ranges
-- streamed CSV, JSON Array, or NDJSON output
-- CSV advanced options: delimiter, optional header, UTF-8 BOM, and nested-object flattening
-- optional gzip compression
-- optional max file size with numbered split files such as `export-0001.csv.gz`
-- browser download; multiple split parts are bundled as a ZIP
-- S3-compatible upload (AWS S3, Cloudflare R2, MinIO) with multipart streaming
-- SFTP upload with password or SSH private-key authentication
-- split S3/SFTP exports write each numbered part separately
-- live in-memory export execution state plus SQLite-backed persistent export history for browser, S3-compatible, and SFTP destinations
-- live progress metrics: records, transferred bytes, files, current slice, queries, retries, rate, and elapsed time
-- cooperative cancellation with S3 multipart abort and SFTP partial-file cleanup
-- durable completed-part checkpoints for split S3/SFTP exports with filename, size, SHA-256, and remote result URI
-- resume/retry for failed, cancelled, or restart-interrupted remote jobs; verified completed split parts are skipped and credentials are re-entered rather than persisted
-- record-level duplicate suppression only when Stellar/Elasticsearch returns a stable `_index` + `_id`; records without stable identity are preserved to avoid false data loss
-- explicit overlap policy for matching export pipelines: manual exports default to `allow`, while Advanced mode can `reject` intersecting time ranges; adjacent half-open ranges remain valid
-- optional scheduled S3/SFTP exports with encrypted-at-rest query/account/destination configuration, Run now/Pause/Enable/Delete controls, timestamped output filenames, and contiguous windows from the last successful run
-- relative time presets (15m, 1h, 24h, 7d) plus custom relative ranges
-- saved export profiles in browser localStorage with credentials explicitly excluded
-- browser-local query history and favorites
+<p align="center">
+  <img src="https://img.shields.io/badge/release-0.1.0-16A34A?style=flat-square" alt="Release 0.1.0">
+  <img src="https://img.shields.io/badge/Python-3.12%2B-2563EB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/auth-Root%20Scope%20%7C%20User%20Scope-7C3AED?style=flat-square" alt="Root Scope or User Scope">
+  <img src="https://img.shields.io/badge/export-CSV%20%7C%20JSON%20%7C%20NDJSON-E11D48?style=flat-square" alt="CSV JSON NDJSON">
+</p>
 
-## Data flow
+---
 
-```text
-Browser
-  -> host / credential type / credential / index / query / time range
-  -> FastAPI
-  -> Root Scope: POST /connect/api/v1/access_token using Basic(email:token)
-  -> User Scope: POST /connect/api/v1/access_token using Bearer API Key
-  -> short-lived JWT
-  -> Root Scope raw search: Elasticsearch DSL request body
-  -> User Scope raw search: Stellar Cyber/Lucene q= query parameters
-  -> GET /connect/api/data/{index}/_search using Bearer JWT
-  -> adaptive non-overlapping time slices
-  -> CSV / JSON Array / NDJSON stream
-  -> one-time browser download
+## Query once. Preview first. Export where you need it.
+
+Stellar Data Exporter provides a Web UI for searching Stellar Cyber raw data across one or more data sources, previewing the result, and exporting it without writing a custom script for every request.
+
+| Capability | What it provides |
+|---|---|
+| **Credential modes** | Root Scope All-Access Token or User Scope API Key |
+| **Multi-source query** | Select one or more friendly Stellar Cyber data sources; internal indices are resolved automatically |
+| **Query modes** | Elasticsearch DSL and Stellar Cyber/Lucene query syntax |
+| **Managed time range** | Start/end time is injected automatically into the effective query |
+| **Preview** | Validate the query and inspect matching records before exporting |
+| **Export formats** | CSV, JSON Array, or NDJSON |
+| **Destinations** | Browser download, S3-compatible object storage, or SFTP |
+| **Large exports** | Adaptive time slicing, record limits, gzip, file splitting, progress, cancellation, and retry/resume |
+| **Operator workflow** | Saved non-secret profiles, query history/favorites, export history, and optional scheduled remote exports |
+
+## Workflow
+
+```mermaid
+flowchart LR
+    C["Connect<br/>Root or User Scope"] --> S["Select data<br/>+ time range"]
+    S --> Q["Enter query"]
+    Q --> P["Preview"]
+    P --> O["Choose format<br/>+ destination"]
+    O --> E["Export"]
+    E --> D["Download / S3 / SFTP"]
 ```
 
-The exporter injects the requested time range around the user's query. A slice is counted first.
-If the slice exceeds the configured target record count, it is bisected and retried until a safe
-slice is reached. Ranges use half-open boundaries `[start, end)`, avoiding slice-boundary duplicates. When stable document identity is present, repeated `_index` + `_id` hits are skipped and counted in the live `Duplicates skipped` metric. No source-content hash fallback is used when identity is absent, because that could discard legitimately distinct records.
+## Everyday workflow
 
-Time slicing limits records returned per request, but it does not by itself reduce Elasticsearch
-shard fan-out from a broad index such as `aella-wineventlog-*`. For long ranges, use a date-scoped
-or date-math index expression when that Stellar index family supports it; the UI warns on open
-wildcards spanning more than 24 hours.
+1. Enter the Stellar Cyber host.
+2. Choose the credential type you were issued.
+3. Select one or more data sources and the time range.
+4. Enter an Elasticsearch DSL or Stellar Cyber query.
+5. Run **Preview** and confirm the matching records.
+6. Choose CSV, JSON, or NDJSON and the destination.
+7. Run the export and monitor progress.
 
-## Security boundary
+For the full operator walkthrough, see the **[Stellar Data Exporter User Guide](https://xdr.ooo/products/stellar-data-exporter-guide)**.
 
-- credentials are not persisted to disk, a database, or browser localStorage
-- saved profiles persist only non-secret configuration; account token, S3 keys, SFTP passwords, and private keys are excluded
-- credentials are held only in process memory for request handling and one-time export jobs
-- persistent job history stores sanitized metadata only; API tokens, raw queries, account email, S3 credentials, and SFTP passwords/private keys are excluded
-- active jobs interrupted by an exporter restart are recorded as `interrupted`; remote jobs can then be resumed after the operator re-enters the original export settings and credentials
-- resume identity is stored only as a SHA-256 fingerprint of export-affecting non-credential settings plus the query content; the raw query is not persisted
-- completed split parts are re-generated and SHA-256 verified before they are skipped, so changed query/output data fails closed instead of silently producing mixed exports
-- one-time download job identifiers expire after 10 minutes, while their sanitized history remains available
-- TLS verification is enabled by default
-- there is currently no multi-user isolation layer; deploy this MVP only in a trusted environment
-- never expose the service directly to the public Internet in its current development state
+## Credential types
 
-Persistent job history uses `.data/export-jobs.sqlite3` in a source checkout. For an installed package, the default state directory is `$XDG_STATE_HOME/stellar-data-exporter` when `XDG_STATE_HOME` is set, otherwise `~/.local/state/stellar-data-exporter`. Set `STELLAR_EXPORTER_STATE_DIR` to override all default state paths, or `STELLAR_EXPORTER_JOB_DB` to override only the job database. New state directories are created with mode `0700`, and the SQLite databases and generated schedule key use mode `0600`. The store contains sanitized job metadata, resume fingerprint, completed-part checkpoints, and progress/result fields only; executable payloads and credentials remain memory-only. Split remote exports resume at verified part boundaries. A non-split remote job has no completed part boundary, so Resume retries that single file from the beginning.
+| Mode | Input | Query behavior |
+|---|---|---|
+| **Root Scope** | Account email + All-Access Token | Supports Elasticsearch DSL and Stellar Cyber Query |
+| **User Scope** | User API Key | Uses Stellar Cyber Query (Lucene) mode for raw-data query/export |
 
-Scheduled exports use `export-schedules.sqlite3` plus `schedule.key` in the same resolved state directory, both owner-only (`0600`). The full scheduled export payload — including query, Stellar account token, and S3/SFTP credentials — is Fernet-encrypted before it is written. For production, inject the master key through `STELLAR_EXPORTER_SCHEDULE_KEY`; `STELLAR_EXPORTER_SCHEDULE_DB`, `STELLAR_EXPORTER_SCHEDULE_KEY_FILE`, and `STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS` override the default paths/poll interval. Scheduled exports support S3/SFTP only, always use overlap rejection, and continue the next successful window from the previous success end so scheduler delays do not create gaps.
+Both flows exchange the supplied credential for a short-lived Stellar Cyber access token and refresh it automatically when needed.
 
-## Stellar Cyber API authentication
+> User Scope is not treated as a reduced “preview-only” mode. It is supported for raw-data search and export through the User API Key flow.
 
-The exporter supports two credential flows for raw-data query and export:
+## Quick start
 
-- **Root Scope** — account email + All-Access Token. The adapter exchanges the pair at
-  `/connect/api/v1/access_token` using HTTP Basic authentication, then uses the returned JWT
-  for Elasticsearch DSL requests.
-- **User Scope** — User API Key. The adapter sends the API Key as a Bearer credential to
-  `/connect/api/v1/access_token`, then uses the returned JWT with Stellar Cyber/Lucene `q=`
-  search parameters. The UI selects Stellar Cyber Query mode automatically for this flow.
+Requirements:
 
-Both flows cache the returned JWT for less than its documented 10-minute lifetime and refresh
-automatically during long-running exports. A 401 from the data API forces one immediate JWT
-refresh and retry.
-
-## Install and run
-
-Python 3.12+ and [uv](https://docs.astral.sh/uv/) are recommended.
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/) recommended
 
 From a source checkout:
 
 ```bash
+git clone https://github.com/xdr-labs/stellar-data-exporter.git
+cd stellar-data-exporter
+
 uv sync --frozen
-uv run stellar-data-exporter --version
 uv run stellar-data-exporter
 ```
 
-The runtime version is also returned by `GET /api/health`. The packaged launcher binds to `127.0.0.1:8787` by default and does not trust proxy headers unless
-`--proxy-headers` is explicitly enabled. Useful overrides are also available through
-`STELLAR_EXPORTER_HOST`, `STELLAR_EXPORTER_PORT`, `STELLAR_EXPORTER_SSL_KEYFILE`,
-`STELLAR_EXPORTER_SSL_CERTFILE`, and `STELLAR_EXPORTER_FORWARDED_ALLOW_IPS`.
+The packaged launcher binds to `127.0.0.1:8787` by default.
 
-After building a wheel, the same command is installed as the `stellar-data-exporter` console
-entry point.
+Open:
 
-## Run development HTTPS
+```text
+http://127.0.0.1:8787
+```
 
-The development server is served directly over HTTPS on port 8787.
+Check the service:
 
-Create or refresh a self-signed development certificate from the repository root:
+```bash
+curl http://127.0.0.1:8787/api/health
+```
+
+Development HTTPS is also available:
 
 ```bash
 ./scripts/generate-dev-cert.sh
-```
-
-Start the HTTPS service:
-
-```bash
 ./scripts/run-dev-https.sh
 ```
 
-Open `https://localhost:8787` locally, or `https://<DEV_HOST>:8787` from another trusted machine.
+Then open `https://localhost:8787`.
 
-Health check for the self-signed development certificate:
+## Query modes
 
-```bash
-curl -k https://127.0.0.1:8787/api/health
+### Elasticsearch DSL
+
+Available with Root Scope credentials.
+
+```json
+{
+  "query": {
+    "term": {
+      "event_status": "New"
+    }
+  }
+}
 ```
 
-The certificate includes SAN entries for the current short hostname, `localhost`,
-`127.0.0.1`, and the primary host IP detected when the certificate is generated. Override
-the detected values with `TLS_HOSTNAME` and `TLS_IP` when needed. Because the certificate
-is self-signed, browsers that do not trust it will show a warning. For an Internet-facing
-deployment, use a certificate issued for the production DNS name by a trusted CA.
+The exporter adds the selected time range around the user query.
 
-## Production deployment
+### Stellar Cyber Query
 
-Production deployment is intentionally different from the development HTTPS listener: Uvicorn binds only to `127.0.0.1:8787`, while Nginx provides public TLS, Basic Auth, security headers, and API rate limiting. Hardened systemd/Nginx templates are under `deploy/`, with the complete install, backup, upgrade, and incident runbook in `docs/PRODUCTION.md`.
+Uses the Lucene-style query syntax familiar from Stellar Cyber search.
 
-Validate the bundled service unit before deployment:
-
-```bash
-systemd-analyze verify deploy/systemd/stellar-data-exporter.service
+```text
+event_status:New AND srcip:10.0.0.*
 ```
 
-Do not expose Uvicorn port 8787 directly on an Internet-reachable interface.
+User Scope API Key mode selects this query mode automatically.
 
-## Tests
+## Output and destinations
+
+| Area | Options |
+|---|---|
+| Format | CSV, JSON Array, NDJSON |
+| File controls | gzip, record limit, selected fields, numbered file splitting |
+| Browser | Direct download; split downloads can be bundled as ZIP |
+| Object storage | AWS S3, Cloudflare R2, MinIO, and other S3-compatible targets |
+| SFTP | Password or SSH private-key authentication |
+
+Advanced mode exposes tuning controls such as field selection, delimiter/header options, maximum file size, target records per slice, overlap policy, and remote-destination details.
+
+## Large export behavior
+
+The exporter uses half-open time ranges and adaptive slicing to avoid sending one oversized raw-data request for a large time window.
+
+It can also:
+
+- show live records/bytes/query/retry progress
+- cancel active exports
+- preserve sanitized job history
+- resume supported remote exports from verified split-part checkpoints
+- suppress duplicates only when Stellar/Elasticsearch provides stable document identity
+- reject overlapping scheduled/advanced exports when configured
+
+## Security boundary
+
+- Credentials are excluded from browser-saved profiles and persistent job history.
+- One-time credentials are held in memory for normal interactive exports.
+- TLS verification is enabled by default.
+- Scheduled remote exports require encrypted credential storage; provide a production master key when using this feature.
+- The project does not provide an application-level multi-user isolation layer.
+- Do not expose the development Uvicorn listener directly to the public Internet.
+
+For production-oriented Nginx/systemd guidance, see [docs/PRODUCTION.md](docs/PRODUCTION.md).
+
+## Documentation
+
+- **Product page:** https://xdr.ooo/products/stellar-data-exporter
+- **User guide:** https://xdr.ooo/products/stellar-data-exporter-guide
+- **Production deployment:** [docs/PRODUCTION.md](docs/PRODUCTION.md)
+- **Source:** https://github.com/xdr-labs/stellar-data-exporter
+
+## Development
+
+Run the test suite:
 
 ```bash
 uv run --extra dev pytest -q
 node --check app/static/app.js
 ```
 
-## Roadmap status
+The project follows the shared DataRelay Labs Engineering System adoption rules in `AGENTS.md` and `.engineering/`.
 
-P0 query/export usability and P1 user productivity are implemented and browser-verified.
+---
 
-P2 operationalization, after one-shot export is stable:
-1. persistent job store and export history without plaintext credentials — implemented
-2. checkpoint/resume and retry-from-checkpoint for remote destinations — implemented at durable split-part boundaries; non-split retries from the beginning
-3. overlap/dedup strategy for resumed or scheduled exports — implemented with half-open ranges, stable document-identity dedup, and explicit allow/reject overlap policy
-4. optional scheduled exports with encrypted credential persistence — implemented for S3/SFTP with protected payload storage, contiguous windows, manual Run now, Pause/Enable, Delete, and restart persistence
-5. production hardening — implemented with loopback-only Uvicorn, Nginx TLS + Basic Auth + per-client API rate limiting, hardened systemd sandboxing, persistent-state guidance, and `docs/PRODUCTION.md` operations runbook
+<p align="center">
+  <strong>Select the data. Preview the query. Export the result.</strong>
+</p>
