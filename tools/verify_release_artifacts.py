@@ -16,6 +16,9 @@ SDIST_REQUIRED = {
     "docs/PRODUCTION.md",
     "scripts/backup-state.sh",
     "scripts/restore-test.sh",
+    "scripts/release-preflight.sh",
+    "scripts/release-qualify.sh",
+    "scripts/hash-release-artifacts.sh",
     "schemas/runtime-contract.schema.json",
     "tools/runtime-contract.py",
 }

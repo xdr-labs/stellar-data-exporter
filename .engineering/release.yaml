@@ -1,14 +1,14 @@
 version: 1
 
 exact_head_required: true
-artifact_hash_required: false
+artifact_hash_required: true
 provenance_required: false
 sbom_required: false
-setup_command: ""
-preflight_required: false
-preflight_command: ""
-qualification_command: ""
-artifact_hash_command: ""
+setup_command: "python -m pip install --disable-pip-version-check 'uv==0.12.18' && uv sync --frozen --extra dev"
+preflight_required: true
+preflight_command: "scripts/release-preflight.sh"
+qualification_command: "scripts/release-qualify.sh dist"
+artifact_hash_command: "scripts/hash-release-artifacts.sh dist dist/SHA256SUMS"
 provenance_command: ""
 sbom_command: ""
 operational_e2e_required: false
