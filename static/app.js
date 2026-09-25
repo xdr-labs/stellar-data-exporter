@@ -12,7 +12,13 @@ const state = {
   previewFields: [],
   selectedFields: [],
   activeExport: null,
+  relativeMinutes: 1440,
+  pendingProfileSources: null,
+  pendingSelectedFields: null,
 };
+
+const PROFILE_STORAGE_KEY = "stellarDataExporter.profiles.v1";
+const QUERY_HISTORY_STORAGE_KEY = "stellarDataExporter.queryHistory.v1";
 
 function isoFromLocal(value) {
   if (!value) return null;
@@ -23,6 +29,55 @@ function localInputValue(date) {
   const offset = date.getTimezoneOffset();
   const local = new Date(date.getTime() - offset * 60000);
   return local.toISOString().slice(0, 19);
+}
+
+function readLocalJson(key, fallback = []) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "null");
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLocalJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function selectedFormat() {
+  return document.querySelector('input[name="format"]:checked')?.value || "csv";
+}
+
+function csvDelimiterValue() {
+  return $("csvDelimiter")?.value === "tab" ? "\t" : ($("csvDelimiter")?.value || ",");
+}
+
+function updateFormatOptions() {
+  const csv = selectedFormat() === "csv";
+  $("csvOptions")?.classList.toggle("hidden", !csv);
+}
+
+function updateRelativePresetUI() {
+  document.querySelectorAll(".time-preset").forEach((button) => {
+    button.classList.toggle("active", Number(button.dataset.minutes) === state.relativeMinutes);
+  });
+}
+
+function applyRelativeMinutes(minutes) {
+  const value = Math.max(1, Number(minutes) || 1);
+  const end = new Date();
+  const start = new Date(end.getTime() - value * 60 * 1000);
+  state.relativeMinutes = value;
+  $("startTime").value = localInputValue(start);
+  $("endTime").value = localInputValue(end);
+  updateRelativePresetUI();
+  updateSummary();
+  refreshIndexPlan();
+}
+
+function markAbsoluteTime() {
+  state.relativeMinutes = null;
+  updateRelativePresetUI();
 }
 
 function humanBytes(bytes) {
@@ -141,6 +196,10 @@ function resetAdvancedDefaults() {
   $("filename").value = "stellar-export";
   $("compress").checked = false;
   $("splitFiles").checked = false;
+  $("csvDelimiter").value = ",";
+  $("csvHeader").checked = true;
+  $("csvBom").checked = false;
+  $("csvFlatten").checked = true;
   $("maxFileSizeValue").value = "250";
   $("maxFileSizeUnit").value = "mb";
   $("s3PathStyle").checked = false;
@@ -165,7 +224,7 @@ function setUiMode(mode, reset = false) {
 }
 
 function outputFilename() {
-  const format = document.querySelector('input[name="format"]:checked')?.value || "csv";
+  const format = selectedFormat();
   const compressed = $("compress").checked;
   let name = $("filename").value.trim() || "stellar-export";
   if (name.toLowerCase().endsWith(".gz")) name = name.slice(0, -3);
@@ -178,8 +237,10 @@ function numberedExample(filename) {
   const lower = filename.toLowerCase();
   const suffix = lower.endsWith(".csv.gz") ? ".csv.gz"
     : lower.endsWith(".json.gz") ? ".json.gz"
+    : lower.endsWith(".ndjson.gz") ? ".ndjson.gz"
     : lower.endsWith(".csv") ? ".csv"
     : lower.endsWith(".json") ? ".json"
+    : lower.endsWith(".ndjson") ? ".ndjson"
     : "";
   const stem = suffix ? filename.slice(0, -suffix.length) : filename;
   return `${stem}-0001${suffix} · ${stem}-0002${suffix} · …`;
@@ -527,6 +588,293 @@ function destinationPayload() {
   };
 }
 
+function setRadioValue(name, value) {
+  const input = document.querySelector(`input[name="${name}"][value="${CSS.escape(String(value))}"]`);
+  if (input) input.checked = true;
+}
+
+function applySourceSelection(sources) {
+  const desired = new Set(sources || []);
+  const inputs = [...document.querySelectorAll('input[name="source"]')];
+  if (!inputs.length) {
+    state.pendingProfileSources = [...desired];
+    return;
+  }
+  inputs.forEach((input) => {
+    input.checked = desired.has(input.value);
+    input.closest(".source-option")?.classList.toggle("selected", input.checked);
+  });
+  state.pendingProfileSources = null;
+}
+
+function nonSecretDestinationProfile() {
+  const type = selectedDestinationType();
+  if (type === "download") return {type: "download"};
+  if (type === "s3") {
+    return {
+      type: "s3",
+      endpoint_url: $("s3Endpoint").value.trim(),
+      region: $("s3Region").value.trim(),
+      bucket: $("s3Bucket").value.trim(),
+      prefix: $("s3Prefix").value.trim(),
+      force_path_style: $("s3PathStyle").checked,
+    };
+  }
+  return {
+    type: "sftp",
+    host: $("sftpHost").value.trim(),
+    port: Number($("sftpPort").value || 22),
+    username: $("sftpUsername").value.trim(),
+    auth_method: $("sftpAuthMethod").value,
+    remote_path: $("sftpRemotePath").value.trim() || "/",
+    verify_host_key: $("sftpVerifyHostKey").checked,
+  };
+}
+
+function exportProfileSnapshot() {
+  return {
+    version: 1,
+    host: $("host").value.trim(),
+    verify_tls: $("verifyTls").checked,
+    sources: selectedSources(),
+    time_field: $("timeField").value.trim() || "timestamp",
+    time: state.relativeMinutes
+      ? {mode: "relative", minutes: state.relativeMinutes}
+      : {mode: "absolute", start: $("startTime").value, end: $("endTime").value},
+    query_mode: selectedQueryMode(),
+    query_dsl: $("queryDsl").value,
+    stellar_query: $("stellarQuery").value,
+    selected_fields: [...state.selectedFields],
+    record_limit: recordLimitValue(),
+    format: selectedFormat(),
+    compress: $("compress").checked,
+    filename: $("filename").value.trim() || "stellar-export",
+    split_files: $("splitFiles").checked,
+    max_file_size_value: $("maxFileSizeValue").value,
+    max_file_size_unit: $("maxFileSizeUnit").value,
+    csv_delimiter: $("csvDelimiter").value,
+    csv_include_header: $("csvHeader").checked,
+    csv_bom: $("csvBom").checked,
+    csv_flatten_nested: $("csvFlatten").checked,
+    destination: nonSecretDestinationProfile(),
+    target_records_per_slice: Number($("targetRecords").value || 5000),
+    minimum_slice_ms: Number($("minimumSlice").value || 1),
+  };
+}
+
+function renderProfiles(selectedId = "") {
+  const profiles = readLocalJson(PROFILE_STORAGE_KEY, []);
+  $("profileSelect").innerHTML = profiles.length
+    ? profiles.map((profile) =>
+        `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`
+      ).join("")
+    : '<option value="">No saved profiles</option>';
+  if (selectedId && profiles.some((item) => item.id === selectedId)) {
+    $("profileSelect").value = selectedId;
+  }
+}
+
+function saveProfile() {
+  const name = $("profileName").value.trim();
+  if (!name) {
+    setStatus("profileStatus", "Enter a profile name.", "warning");
+    return;
+  }
+  let snapshot;
+  try {
+    snapshot = exportProfileSnapshot();
+  } catch (error) {
+    setStatus("profileStatus", error.message, "error");
+    return;
+  }
+  const profiles = readLocalJson(PROFILE_STORAGE_KEY, []);
+  const existing = profiles.find((item) => item.name.toLowerCase() === name.toLowerCase());
+  const id = existing?.id || `profile-${Date.now()}`;
+  const next = profiles.filter((item) => item.id !== id);
+  next.unshift({id, name, updated_at: new Date().toISOString(), settings: snapshot});
+  writeLocalJson(PROFILE_STORAGE_KEY, next.slice(0, 30));
+  renderProfiles(id);
+  setStatus("profileStatus", "Profile saved locally without credentials.", "success");
+}
+
+function applyProfileSettings(settings) {
+  if (!settings) return;
+  $("host").value = settings.host || "";
+  $("verifyTls").checked = settings.verify_tls !== false;
+  $("timeField").value = settings.time_field || "timestamp";
+  applySourceSelection(settings.sources || ["alerts"]);
+
+  if (settings.time?.mode === "relative" && settings.time.minutes) {
+    applyRelativeMinutes(settings.time.minutes);
+  } else if (settings.time) {
+    state.relativeMinutes = null;
+    $("startTime").value = settings.time.start || $("startTime").value;
+    $("endTime").value = settings.time.end || $("endTime").value;
+    updateRelativePresetUI();
+  }
+
+  setRadioValue("queryMode", settings.query_mode || "elasticsearch_dsl");
+  $("queryDsl").value = settings.query_dsl || '{"query":{"match_all":{}}}';
+  $("stellarQuery").value = settings.stellar_query || "";
+  state.pendingSelectedFields = Array.isArray(settings.selected_fields)
+    ? [...settings.selected_fields]
+    : null;
+
+  if (settings.record_limit == null) {
+    setRadioValue("exportRecords", "all");
+  } else {
+    setRadioValue("exportRecords", "limit");
+    $("recordLimit").value = String(settings.record_limit);
+  }
+
+  setRadioValue("format", settings.format || "csv");
+  $("compress").checked = !!settings.compress;
+  $("filename").value = settings.filename || "stellar-export";
+  $("splitFiles").checked = !!settings.split_files;
+  $("maxFileSizeValue").value = settings.max_file_size_value || "250";
+  $("maxFileSizeUnit").value = settings.max_file_size_unit || "mb";
+  $("csvDelimiter").value = settings.csv_delimiter || ",";
+  $("csvHeader").checked = settings.csv_include_header !== false;
+  $("csvBom").checked = !!settings.csv_bom;
+  $("csvFlatten").checked = settings.csv_flatten_nested !== false;
+
+  const destination = settings.destination || {type: "download"};
+  setRadioValue("destination", destination.type || "download");
+  if (destination.type === "s3") {
+    $("s3Endpoint").value = destination.endpoint_url || "";
+    $("s3Region").value = destination.region || "";
+    $("s3Bucket").value = destination.bucket || "";
+    $("s3Prefix").value = destination.prefix || "";
+    $("s3PathStyle").checked = !!destination.force_path_style;
+  } else if (destination.type === "sftp") {
+    $("sftpHost").value = destination.host || "";
+    $("sftpPort").value = String(destination.port || 22);
+    $("sftpUsername").value = destination.username || "";
+    $("sftpAuthMethod").value = destination.auth_method || "private_key";
+    $("sftpRemotePath").value = destination.remote_path || "/";
+    $("sftpVerifyHostKey").checked = destination.verify_host_key !== false;
+  }
+
+  $("targetRecords").value = String(settings.target_records_per_slice || 5000);
+  $("minimumSlice").value = String(settings.minimum_slice_ms || 1);
+
+  updateRecordLimitUI();
+  updateSplitUI();
+  updateFormatOptions();
+  updateQueryModeUI();
+  updateSftpAuthUI();
+  updateDestinationUI();
+  updateSummary();
+  refreshIndexPlan();
+}
+
+function loadSelectedProfile() {
+  const id = $("profileSelect").value;
+  const profile = readLocalJson(PROFILE_STORAGE_KEY, []).find((item) => item.id === id);
+  if (!profile) {
+    setStatus("profileStatus", "Select a saved profile.", "warning");
+    return;
+  }
+  $("profileName").value = profile.name;
+  applyProfileSettings(profile.settings);
+  setStatus("profileStatus", "Profile loaded. Credentials remain session-only.", "success");
+}
+
+function deleteSelectedProfile() {
+  const id = $("profileSelect").value;
+  if (!id) return;
+  const next = readLocalJson(PROFILE_STORAGE_KEY, []).filter((item) => item.id !== id);
+  writeLocalJson(PROFILE_STORAGE_KEY, next);
+  renderProfiles();
+  setStatus("profileStatus", "Profile deleted.", "success");
+}
+
+function currentHistoryEntry() {
+  return {
+    query_mode: selectedQueryMode(),
+    query_dsl: $("queryDsl").value,
+    stellar_query: $("stellarQuery").value,
+    sources: selectedSources(),
+    time_field: $("timeField").value.trim() || "timestamp",
+  };
+}
+
+function historySignature(entry) {
+  return JSON.stringify({
+    query_mode: entry.query_mode,
+    query_dsl: entry.query_dsl,
+    stellar_query: entry.stellar_query,
+    sources: entry.sources,
+    time_field: entry.time_field,
+  });
+}
+
+function renderQueryHistory(selectedId = "") {
+  const items = readLocalJson(QUERY_HISTORY_STORAGE_KEY, []);
+  $("queryHistorySelect").innerHTML = items.length
+    ? items.map((item) => {
+        const raw = item.query_mode === "stellar_lucene" ? item.stellar_query : item.query_dsl;
+        const compact = String(raw || "").replace(/\s+/g, " ").slice(0, 80);
+        const label = `${item.favorite ? "★ " : ""}${compact || "(empty query)"}`;
+        return `<option value="${escapeHtml(item.id)}">${escapeHtml(label)}</option>`;
+      }).join("")
+    : '<option value="">No query history</option>';
+  if (selectedId && items.some((item) => item.id === selectedId)) {
+    $("queryHistorySelect").value = selectedId;
+  }
+  const selected = items.find((item) => item.id === $("queryHistorySelect").value);
+  $("favoriteQueryHistory").textContent = selected?.favorite ? "Unfavorite" : "Favorite";
+}
+
+function rememberCurrentQuery() {
+  const entry = currentHistoryEntry();
+  const signature = historySignature(entry);
+  const items = readLocalJson(QUERY_HISTORY_STORAGE_KEY, []);
+  const existing = items.find((item) => historySignature(item) === signature);
+  const id = existing?.id || `query-${Date.now()}`;
+  const next = items.filter((item) => item.id !== id);
+  next.unshift({
+    ...entry,
+    id,
+    favorite: !!existing?.favorite,
+    used_at: new Date().toISOString(),
+  });
+  writeLocalJson(QUERY_HISTORY_STORAGE_KEY, next.slice(0, 50));
+  renderQueryHistory(id);
+}
+
+function loadSelectedQueryHistory() {
+  const id = $("queryHistorySelect").value;
+  const item = readLocalJson(QUERY_HISTORY_STORAGE_KEY, []).find((entry) => entry.id === id);
+  if (!item) return;
+  setRadioValue("queryMode", item.query_mode || "elasticsearch_dsl");
+  $("queryDsl").value = item.query_dsl || '{"query":{"match_all":{}}}';
+  $("stellarQuery").value = item.stellar_query || "";
+  applySourceSelection(item.sources || ["alerts"]);
+  $("timeField").value = item.time_field || "timestamp";
+  updateQueryModeUI();
+  updateSummary();
+  refreshIndexPlan();
+}
+
+function toggleSelectedHistoryFavorite() {
+  const id = $("queryHistorySelect").value;
+  if (!id) return;
+  const items = readLocalJson(QUERY_HISTORY_STORAGE_KEY, []);
+  const target = items.find((item) => item.id === id);
+  if (!target) return;
+  target.favorite = !target.favorite;
+  items.sort((a, b) => Number(b.favorite) - Number(a.favorite) ||
+    String(b.used_at).localeCompare(String(a.used_at)));
+  writeLocalJson(QUERY_HISTORY_STORAGE_KEY, items);
+  renderQueryHistory(id);
+}
+
+function clearQueryHistory() {
+  writeLocalJson(QUERY_HISTORY_STORAGE_KEY, []);
+  renderQueryHistory();
+}
+
 function setStatus(id, message, type = "") {
   const el = $(id);
   el.textContent = message;
@@ -617,7 +965,11 @@ function updateDiscoveredFields(fields) {
   const previousKnown = new Set(state.previewFields);
   const available = [...new Set((fields || []).filter(Boolean))];
 
-  if (!state.previewFields.length) {
+  if (state.pendingSelectedFields) {
+    const availableSet = new Set(available);
+    state.selectedFields = state.pendingSelectedFields.filter((field) => availableSet.has(field));
+    state.pendingSelectedFields = null;
+  } else if (!state.previewFields.length) {
     state.selectedFields = [...available];
   } else {
     const availableSet = new Set(available);
@@ -730,8 +1082,9 @@ function updateSummary() {
   $("summaryRange").textContent = start && end ? `${start.replace("T", " ")} → ${end.replace("T", " ")}` : "—";
   $("summaryRecords").textContent = state.previewTotal == null ? "Preview required" : Number(state.previewTotal).toLocaleString();
 
-  const format = document.querySelector('input[name="format"]:checked')?.value || "csv";
-  $("summaryOutput").textContent = `${format.toUpperCase()}${$("compress").checked ? " · gzip" : ""}`;
+  const format = selectedFormat();
+  const formatLabel = format === "json" ? "JSON Array" : format.toUpperCase();
+  $("summaryOutput").textContent = `${formatLabel}${$("compress").checked ? " · gzip" : ""}`;
   $("summarySplit").textContent = $("splitFiles").checked
     ? `${$("maxFileSizeValue").value || "?"} ${$("maxFileSizeUnit").value.toUpperCase()} parts`
     : "Single file";
@@ -740,6 +1093,7 @@ function updateSummary() {
     const radio = el.querySelector('input[name="format"]');
     el.classList.toggle("selected", !!radio?.checked);
   });
+  updateFormatOptions();
   updateDestinationUI();
   renderEffectiveRequest();
 }
@@ -846,6 +1200,7 @@ async function previewQuery() {
     } else {
       setStatus("queryStatus", `Preview loaded: ${result.rows.length} rows shown.`, "success");
     }
+    rememberCurrentQuery();
     updateSummary();
   } catch (error) {
     setStatus("queryStatus", error.message, "error");
@@ -949,10 +1304,14 @@ async function runExport() {
       ...basePayload(),
       selected_fields: isAdvancedMode() && state.previewFields.length ? [...state.selectedFields] : null,
       record_limit: recordLimitValue(),
-      format: document.querySelector('input[name="format"]:checked')?.value || "csv",
+      format: selectedFormat(),
       compress: $("compress").checked,
       filename: $("filename").value.trim() || "stellar-export",
       max_file_size_bytes: splitSizeBytes(),
+      csv_delimiter: csvDelimiterValue(),
+      csv_include_header: $("csvHeader").checked,
+      csv_bom: $("csvBom").checked,
+      csv_flatten_nested: $("csvFlatten").checked,
       destination: destinationPayload(),
     };
     const result = await api("/api/export/jobs", {
@@ -992,8 +1351,9 @@ async function runExport() {
 
 function renderSources(items) {
   const grid = $("sourceGrid");
+  const desired = new Set(state.pendingProfileSources || ["alerts"]);
   grid.innerHTML = items.map((item, index) => {
-    const checked = item.id === "alerts" ? "checked" : "";
+    const checked = desired.has(item.id) ? "checked" : "";
     return `<label class="source-option ${checked ? "selected" : ""}">
       <input type="checkbox" name="source" value="${escapeHtml(item.id)}" ${checked} />
       <span>
@@ -1011,6 +1371,7 @@ function renderSources(items) {
       refreshIndexPlan();
     });
   });
+  state.pendingProfileSources = null;
   updateSummary();
   refreshIndexPlan();
 }
@@ -1039,6 +1400,8 @@ function initialize() {
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   $("startTime").value = localInputValue(yesterday);
   $("endTime").value = localInputValue(now);
+  state.relativeMinutes = 1440;
+  updateRelativePresetUI();
 
   $("basicMode").addEventListener("click", () => setUiMode("basic", true));
   $("advancedMode").addEventListener("click", () => setUiMode("advanced"));
@@ -1052,7 +1415,30 @@ function initialize() {
   $("copyCurl").addEventListener("click", () => copyInspectorText(buildRedactedCurl(), "cURL"));
   $("runExport").addEventListener("click", runExport);
   $("cancelExport").addEventListener("click", cancelExport);
+  $("saveProfile").addEventListener("click", saveProfile);
+  $("loadProfile").addEventListener("click", loadSelectedProfile);
+  $("deleteProfile").addEventListener("click", deleteSelectedProfile);
+  $("loadQueryHistory").addEventListener("click", loadSelectedQueryHistory);
+  $("favoriteQueryHistory").addEventListener("click", toggleSelectedHistoryFavorite);
+  $("clearQueryHistory").addEventListener("click", clearQueryHistory);
+  $("queryHistorySelect").addEventListener("change", () => renderQueryHistory($("queryHistorySelect").value));
   $("splitFiles").addEventListener("change", updateSplitUI);
+  document.querySelectorAll('input[name="format"]').forEach((radio) => {
+    radio.addEventListener("change", updateFormatOptions);
+  });
+  document.querySelectorAll(".time-preset").forEach((button) => {
+    button.addEventListener("click", () => applyRelativeMinutes(Number(button.dataset.minutes)));
+  });
+  $("applyRelative").addEventListener("click", () => {
+    const value = Number($("relativeValue").value);
+    const unit = $("relativeUnit").value;
+    const multiplier = unit === "days" ? 1440 : unit === "hours" ? 60 : 1;
+    if (!Number.isFinite(value) || value < 1) {
+      setStatus("queryStatus", "Relative time must be a positive number.", "warning");
+      return;
+    }
+    applyRelativeMinutes(value * multiplier);
+  });
   document.querySelectorAll('input[name="exportRecords"]').forEach((radio) => {
     radio.addEventListener("change", updateRecordLimitUI);
   });
@@ -1080,8 +1466,14 @@ function initialize() {
     $("toggleActualIndices").textContent = showing ? "Show actual indices" : "Hide actual indices";
   });
   for (const id of ["startTime", "endTime"]) {
-    $(id).addEventListener("input", refreshIndexPlan);
-    $(id).addEventListener("change", refreshIndexPlan);
+    $(id).addEventListener("input", () => {
+      markAbsoluteTime();
+      refreshIndexPlan();
+    });
+    $(id).addEventListener("change", () => {
+      markAbsoluteTime();
+      refreshIndexPlan();
+    });
   }
 
   document.querySelectorAll("input,textarea,select").forEach((el) => {
@@ -1093,8 +1485,11 @@ function initialize() {
     radio.addEventListener("change", updateDestinationUI);
   });
 
+  renderProfiles();
+  renderQueryHistory();
   updateSftpAuthUI();
   updateRecordLimitUI();
+  updateFormatOptions();
   updateQueryModeUI();
   setUiMode("basic");
   updateSummary();

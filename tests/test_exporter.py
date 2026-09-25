@@ -1,6 +1,12 @@
 import json
 
-from app.exporter import discover_fields, flatten_record, project_record
+from app.exporter import (
+    csv_stream,
+    discover_fields,
+    flatten_record,
+    ndjson_stream,
+    project_record,
+)
 
 
 def test_flatten_record_flattens_nested_dict_and_serializes_arrays():
@@ -64,9 +70,45 @@ async def sample_records(count=12):
         }
 
 
+async def collect_bytes(stream):
+    chunks = [chunk async for chunk in stream]
+    return b"".join(chunks)
+
+
 def test_numbered_filename_preserves_compound_extension():
     assert numbered_filename("alerts.csv.gz", 1) == "alerts-0001.csv.gz"
     assert numbered_filename("events.json", 12) == "events-0012.json"
+    assert numbered_filename("events.ndjson", 3) == "events-0003.ndjson"
+
+
+@pytest.mark.asyncio
+async def test_ndjson_stream_writes_one_json_object_per_line():
+    payload = await collect_bytes(ndjson_stream(sample_records(2)))
+    lines = payload.decode("utf-8").strip().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["n"] == 0
+    assert json.loads(lines[1])["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_csv_stream_supports_delimiter_header_bom_and_nested_json():
+    async def nested():
+        yield {"a": 1, "nested": {"user": "alice"}}
+
+    payload = await collect_bytes(
+        csv_stream(
+            nested(),
+            delimiter=";",
+            include_header=False,
+            bom=True,
+            flatten_nested=False,
+        )
+    )
+    assert payload.startswith(b"\xef\xbb\xbf")
+    text = payload[3:].decode("utf-8").strip()
+    assert not text.startswith("a;")
+    assert text.startswith('1;')
+    assert '"{""user"":""alice""}"' in text
 
 
 @pytest.mark.asyncio

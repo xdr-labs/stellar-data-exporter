@@ -110,12 +110,16 @@ class DestinationTestInput(BaseModel):
 
 
 class ExportInput(QueryInput):
-    format: Literal["csv", "json"] = "csv"
+    format: Literal["csv", "json", "ndjson"] = "csv"
     compress: bool = False
     filename: str | None = None
     max_file_size_bytes: int | None = Field(default=None, ge=256)
     selected_fields: list[str] | None = Field(default=None, min_length=1)
     record_limit: int | None = Field(default=None, ge=1)
+    csv_delimiter: Literal[",", ";", "\t", "|"] = ","
+    csv_include_header: bool = True
+    csv_bom: bool = False
+    csv_flatten_nested: bool = True
     destination: Destination = Field(default_factory=DownloadDestination)
 
     @field_validator("selected_fields")

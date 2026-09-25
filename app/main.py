@@ -25,6 +25,7 @@ from .exporter import (
     gzip_stream,
     iter_export_part_files,
     json_stream,
+    ndjson_stream,
     project_records,
 )
 from .models import (
@@ -171,7 +172,11 @@ def build_export_source(payload: ExportInput, job: ExportJob | None = None):
         records = project_records(records, payload.selected_fields)
         preferred_fields = list(payload.selected_fields)
 
-    content_type = "text/csv" if payload.format == "csv" else "application/json"
+    content_type = {
+        "csv": "text/csv",
+        "json": "application/json",
+        "ndjson": "application/x-ndjson",
+    }[payload.format]
     filename = safe_filename(payload.filename, payload.format, payload.compress)
     return records, preferred_fields, content_type, filename
 
@@ -179,7 +184,16 @@ def build_export_source(payload: ExportInput, job: ExportJob | None = None):
 def build_output(payload: ExportInput, job: ExportJob | None = None):
     records, preferred_fields, content_type, filename = build_export_source(payload, job)
     if payload.format == "csv":
-        stream = csv_stream(records, preferred_fields)
+        stream = csv_stream(
+            records,
+            preferred_fields,
+            delimiter=payload.csv_delimiter,
+            include_header=payload.csv_include_header,
+            bom=payload.csv_bom,
+            flatten_nested=payload.csv_flatten_nested,
+        )
+    elif payload.format == "ndjson":
+        stream = ndjson_stream(records)
     else:
         stream = json_stream(records)
 
@@ -200,6 +214,10 @@ def build_output_parts(payload: ExportInput, job: ExportJob | None = None):
         compress=payload.compress,
         base_filename=filename,
         max_bytes=payload.max_file_size_bytes,
+        csv_delimiter=payload.csv_delimiter,
+        csv_include_header=payload.csv_include_header,
+        csv_bom=payload.csv_bom,
+        csv_flatten_nested=payload.csv_flatten_nested,
     )
     return parts, content_type, filename
 

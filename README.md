@@ -16,7 +16,8 @@ The first working slice is intentionally small:
 - readable connection/authentication/permission errors
 - query validation and 100-record preview
 - adaptive time slicing for large ranges
-- streamed CSV or JSON output
+- streamed CSV, JSON Array, or NDJSON output
+- CSV advanced options: delimiter, optional header, UTF-8 BOM, and nested-object flattening
 - optional gzip compression
 - optional max file size with numbered split files such as `export-0001.csv.gz`
 - browser download; multiple split parts are bundled as a ZIP
@@ -26,6 +27,9 @@ The first working slice is intentionally small:
 - in-memory export job status for browser, S3-compatible, and SFTP destinations
 - live progress metrics: records, transferred bytes, files, current slice, queries, retries, rate, and elapsed time
 - cooperative cancellation with S3 multipart abort and SFTP partial-file cleanup
+- relative time presets (15m, 1h, 24h, 7d) plus custom relative ranges
+- saved export profiles in browser localStorage with credentials explicitly excluded
+- browser-local query history and favorites
 
 ## Data flow
 
@@ -37,7 +41,7 @@ Browser
   -> short-lived JWT
   -> GET /connect/api/data/{index}/_search using Bearer JWT
   -> adaptive non-overlapping time slices
-  -> CSV or JSON stream
+  -> CSV / JSON Array / NDJSON stream
   -> one-time browser download
 ```
 
@@ -52,7 +56,8 @@ wildcards spanning more than 24 hours.
 
 ## Security boundary
 
-- credentials are not persisted to disk or a database
+- credentials are not persisted to disk, a database, or browser localStorage
+- saved profiles persist only non-secret configuration; account token, S3 keys, SFTP passwords, and private keys are excluded
 - credentials are held only in process memory for request handling and one-time export jobs
 - one-time download job identifiers expire after 10 minutes
 - TLS verification is enabled by default
@@ -111,13 +116,9 @@ uv run --extra dev pytest -q
 node --check static/app.js
 ```
 
-## Roadmap after P0
+## Roadmap status
 
-P1 user productivity:
-1. saved export profiles in browser localStorage, excluding credentials
-2. query history and favorites in browser localStorage
-3. relative time presets and custom relative ranges
-4. JSON Array / NDJSON plus CSV delimiter, header, BOM, and flatten controls
+P0 query/export usability and P1 user productivity are implemented and browser-verified.
 
 P2 operationalization, after one-shot export is stable:
 1. persistent job store and export history without plaintext credentials

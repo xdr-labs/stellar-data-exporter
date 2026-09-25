@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -304,3 +305,39 @@ def test_pending_download_job_can_be_cancelled(monkeypatch):
 
     download = client.get(body["download_url"])
     assert download.status_code == 409
+
+
+def test_ndjson_and_csv_advanced_options_flow_through_download_api(monkeypatch):
+    monkeypatch.setattr(StellarClient, "search", fake_search)
+    client = TestClient(app)
+
+    ndjson_request = {
+        **payload(),
+        "format": "ndjson",
+        "compress": False,
+        "filename": "events",
+    }
+    ndjson_job = client.post("/api/export/jobs", json=ndjson_request)
+    ndjson = client.get(ndjson_job.json()["download_url"])
+    assert ndjson.status_code == 200
+    assert ndjson.headers["content-type"].startswith("application/x-ndjson")
+    assert ndjson.headers["content-disposition"] == 'attachment; filename="events.ndjson"'
+    lines = ndjson.text.strip().splitlines()
+    assert len(lines) == 2
+    assert [json.loads(line)["severity"] for line in lines] == [80, 90]
+
+    csv_request = {
+        **payload(),
+        "format": "csv",
+        "compress": False,
+        "filename": "events-semicolon",
+        "csv_delimiter": ";",
+        "csv_include_header": False,
+        "csv_bom": True,
+    }
+    csv_job = client.post("/api/export/jobs", json=csv_request)
+    csv_download = client.get(csv_job.json()["download_url"])
+    assert csv_download.status_code == 200
+    assert csv_download.content.startswith(b"\xef\xbb\xbf")
+    first_line = csv_download.content[3:].decode("utf-8").splitlines()[0]
+    assert first_line.startswith("2026-09-25T00:00:00+00:00;80;")

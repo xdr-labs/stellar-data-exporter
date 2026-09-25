@@ -222,39 +222,87 @@ async def json_stream(records: AsyncIterator[dict[str, Any]]) -> AsyncIterator[b
     yield b"]"
 
 
+async def ndjson_stream(records: AsyncIterator[dict[str, Any]]) -> AsyncIterator[bytes]:
+    async for record in records:
+        yield (
+            json.dumps(record, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            + b"\n"
+        )
+
+
+def csv_record(record: dict[str, Any], *, flatten_nested: bool) -> dict[str, Any]:
+    if flatten_nested:
+        return flatten_record(record)
+
+    prepared: dict[str, Any] = {}
+    for key, value in record.items():
+        if isinstance(value, (dict, list)):
+            prepared[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        else:
+            prepared[key] = value
+    return prepared
+
+
+def csv_preferred_columns(
+    preferred_fields: list[str] | None,
+    *,
+    flatten_nested: bool,
+) -> list[str]:
+    if not preferred_fields:
+        return []
+    if flatten_nested:
+        return list(preferred_fields)
+    return list(dict.fromkeys(field.split(".", 1)[0] for field in preferred_fields))
+
+
 async def csv_stream(
     records: AsyncIterator[dict[str, Any]],
     preferred_fields: list[str] | None = None,
+    *,
+    delimiter: str = ",",
+    include_header: bool = True,
+    bom: bool = False,
+    flatten_nested: bool = True,
 ) -> AsyncIterator[bytes]:
     buffered: list[dict[str, Any]] = []
-    columns: list[str] = list(preferred_fields or [])
+    columns = csv_preferred_columns(
+        preferred_fields,
+        flatten_nested=flatten_nested,
+    )
 
     async for record in records:
-        flat = flatten_record(record)
-        buffered.append(flat)
+        row = csv_record(record, flatten_nested=flatten_nested)
+        buffered.append(row)
         if not columns:
-            columns = list(flat.keys())
+            columns = list(row.keys())
         else:
-            for key in flat:
+            for key in row:
                 if key not in columns and len(buffered) <= 100:
                     columns.append(key)
         if len(buffered) >= 100:
             break
 
-    if not buffered:
-        return
-
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
-    writer.writeheader()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=columns,
+        extrasaction="ignore",
+        delimiter=delimiter,
+    )
+    if bom:
+        yield b"\xef\xbb\xbf"
+    if include_header and columns:
+        writer.writeheader()
+
     for row in buffered:
         writer.writerow(row)
-    yield output.getvalue().encode("utf-8")
-    output.seek(0)
-    output.truncate(0)
+    if output.tell():
+        yield output.getvalue().encode("utf-8")
+        output.seek(0)
+        output.truncate(0)
 
     async for record in records:
-        writer.writerow(flatten_record(record))
+        writer.writerow(csv_record(record, flatten_nested=flatten_nested))
         yield output.getvalue().encode("utf-8")
         output.seek(0)
         output.truncate(0)
@@ -313,14 +361,16 @@ class _PartWriter:
         return os.path.getsize(self.path)
 
 
-async def _flattened_records(
+async def _csv_records(
     buffered: list[dict[str, Any]],
     records: AsyncIterator[dict[str, Any]],
+    *,
+    flatten_nested: bool,
 ) -> AsyncIterator[dict[str, Any]]:
     for record in buffered:
         yield record
     async for record in records:
-        yield flatten_record(record)
+        yield csv_record(record, flatten_nested=flatten_nested)
 
 
 async def iter_export_part_files(
@@ -331,26 +381,37 @@ async def iter_export_part_files(
     compress: bool,
     base_filename: str,
     max_bytes: int,
+    csv_delimiter: str = ",",
+    csv_include_header: bool = True,
+    csv_bom: bool = False,
+    csv_flatten_nested: bool = True,
 ) -> AsyncIterator[ExportPart]:
     if max_bytes < 1:
         raise ValueError("max_bytes must be positive")
 
-    columns: list[str] = list(preferred_fields or [])
-    buffered_flat: list[dict[str, Any]] = []
+    columns = csv_preferred_columns(
+        preferred_fields,
+        flatten_nested=csv_flatten_nested,
+    )
+    buffered_csv: list[dict[str, Any]] = []
 
     if format == "csv":
         async for record in records:
-            flat = flatten_record(record)
-            buffered_flat.append(flat)
+            row = csv_record(record, flatten_nested=csv_flatten_nested)
+            buffered_csv.append(row)
             if not columns:
-                columns = list(flat.keys())
+                columns = list(row.keys())
             else:
-                for key in flat:
-                    if key not in columns and len(buffered_flat) <= 100:
+                for key in row:
+                    if key not in columns and len(buffered_csv) <= 100:
                         columns.append(key)
-            if len(buffered_flat) >= 100:
+            if len(buffered_csv) >= 100:
                 break
-        source = _flattened_records(buffered_flat, records)
+        source = _csv_records(
+            buffered_csv,
+            records,
+            flatten_nested=csv_flatten_nested,
+        )
     else:
         source = records
 
@@ -362,10 +423,17 @@ async def iter_export_part_files(
 
     def open_part() -> _PartWriter:
         part = _PartWriter(compress=compress)
-        if format == "csv" and columns:
-            output = io.StringIO()
-            csv.DictWriter(output, fieldnames=columns).writeheader()
-            part.write(output.getvalue().encode("utf-8"))
+        if format == "csv":
+            if csv_bom:
+                part.write(b"\xef\xbb\xbf")
+            if csv_include_header and columns:
+                output = io.StringIO()
+                csv.DictWriter(
+                    output,
+                    fieldnames=columns,
+                    delimiter=csv_delimiter,
+                ).writeheader()
+                part.write(output.getvalue().encode("utf-8"))
         elif format == "json":
             part.write(b"[")
         return part
@@ -381,9 +449,10 @@ async def iter_export_part_files(
                 output,
                 fieldnames=columns,
                 extrasaction="ignore",
+                delimiter=csv_delimiter,
             ).writerow(record)
             writer.write(output.getvalue().encode("utf-8"))
-        else:
+        elif format == "json":
             if not json_first:
                 writer.write(b",")
             writer.write(
@@ -394,6 +463,15 @@ async def iter_export_part_files(
                 ).encode("utf-8")
             )
             json_first = False
+        else:
+            writer.write(
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                + b"\n"
+            )
 
         if writer.size() >= max_bytes:
             if format == "json":

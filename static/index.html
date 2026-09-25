@@ -62,6 +62,34 @@
 
       <section class="card">
         <div class="section-title"><span class="step">2</span><div><h2>Query</h2><p>Paste a query you wrote yourself or generated with any AI tool.</p></div></div>
+        <div class="productivity-tools advanced-only">
+          <div class="productivity-group">
+            <div>
+              <strong>Saved export profiles</strong>
+              <small>Browser-only settings. Credentials and private keys are never saved.</small>
+            </div>
+            <div class="productivity-controls">
+              <input id="profileName" placeholder="Profile name" />
+              <select id="profileSelect"><option value="">No saved profiles</option></select>
+              <button id="saveProfile" class="button secondary small" type="button">Save</button>
+              <button id="loadProfile" class="button secondary small" type="button">Load</button>
+              <button id="deleteProfile" class="button secondary small" type="button">Delete</button>
+            </div>
+            <div id="profileStatus" class="status hidden"></div>
+          </div>
+          <div class="productivity-group">
+            <div>
+              <strong>Query history &amp; favorites</strong>
+              <small>Successful previews are kept locally so common queries can be reused.</small>
+            </div>
+            <div class="productivity-controls history-controls">
+              <select id="queryHistorySelect"><option value="">No query history</option></select>
+              <button id="loadQueryHistory" class="button secondary small" type="button">Load</button>
+              <button id="favoriteQueryHistory" class="button secondary small" type="button">Favorite</button>
+              <button id="clearQueryHistory" class="button secondary small" type="button">Clear</button>
+            </div>
+          </div>
+        </div>
         <div class="source-header">
           <div>
             <label>Data sources</label>
@@ -95,6 +123,22 @@
           <div id="resolvedIndexSummary" class="resolved-index-summary">Planning selected data sources…</div>
           <code id="resolvedIndices" class="hidden">aella-ser-*</code>
           <div id="indexPlanWarnings" class="index-plan-warnings hidden"></div>
+        </div>
+        <div class="time-presets">
+          <span>Relative time</span>
+          <button class="time-preset" type="button" data-minutes="15">15m</button>
+          <button class="time-preset" type="button" data-minutes="60">1h</button>
+          <button class="time-preset active" type="button" data-minutes="1440">24h</button>
+          <button class="time-preset" type="button" data-minutes="10080">7d</button>
+          <div class="custom-relative advanced-only">
+            <input id="relativeValue" type="number" min="1" value="30" />
+            <select id="relativeUnit">
+              <option value="minutes">minutes</option>
+              <option value="hours" selected>hours</option>
+              <option value="days">days</option>
+            </select>
+            <button id="applyRelative" class="button secondary small" type="button">Apply</button>
+          </div>
         </div>
         <div class="grid two">
           <label>Start
@@ -217,8 +261,22 @@
       <section class="card">
         <div class="section-title"><span class="step">4</span><div><h2>Output</h2><p>Choose CSV or JSON. Advanced mode adds field, limit, compression and file-splitting controls.</p></div></div>
         <div class="format-grid">
-          <label class="choice selected"><input type="radio" name="format" value="csv" checked /><span><b>CSV</b><small>Nested objects flatten to dot notation.</small></span></label>
-          <label class="choice"><input type="radio" name="format" value="json" /><span><b>JSON</b><small>Streams a valid JSON array.</small></span></label>
+          <label class="choice selected"><input type="radio" name="format" value="csv" checked /><span><b>CSV</b><small>Spreadsheet-friendly tabular export.</small></span></label>
+          <label class="choice"><input type="radio" name="format" value="json" /><span><b>JSON Array</b><small>Streams one valid JSON array.</small></span></label>
+          <label class="choice"><input type="radio" name="format" value="ndjson" /><span><b>NDJSON</b><small>One JSON object per line.</small></span></label>
+        </div>
+        <div id="csvOptions" class="csv-options advanced-only">
+          <label>Delimiter
+            <select id="csvDelimiter">
+              <option value="," selected>Comma (,)</option>
+              <option value=";">Semicolon (;)</option>
+              <option value="tab">Tab</option>
+              <option value="|">Pipe (|)</option>
+            </select>
+          </label>
+          <label class="check"><input id="csvHeader" type="checkbox" checked /> Include header row</label>
+          <label class="check"><input id="csvBom" type="checkbox" /> UTF-8 BOM for Excel</label>
+          <label class="check"><input id="csvFlatten" type="checkbox" checked /> Flatten nested objects to dot notation</label>
         </div>
         <div class="record-limit-panel advanced-only">
           <span class="record-limit-title">Export records</span>
