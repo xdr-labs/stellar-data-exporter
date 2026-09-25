@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -79,6 +80,7 @@ class ExportJob:
     cancel_requested: bool = False
     result: str | None = None
     error: str | None = None
+    completed_parts: list[dict[str, Any]] = field(default_factory=list)
     task: asyncio.Task | None = field(default=None, repr=False)
     last_persisted_at: float = field(default=0.0, repr=False)
 
@@ -136,6 +138,7 @@ def job_store_record(job: ExportJob) -> dict[str, Any]:
         "result": job.result,
         "error": job.error,
         "metadata": job.metadata,
+        "completed_parts": job.completed_parts,
     }
 
 
@@ -145,6 +148,14 @@ def persist_job(job: ExportJob, *, force: bool = False) -> None:
         return
     JOB_STORE.save(job_store_record(job))
     job.last_persisted_at = now
+
+
+def file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def cleanup_jobs() -> None:
@@ -315,6 +326,7 @@ def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
         "cancel_requested": job.cancel_requested,
         "result": job.result,
         "error": job.error,
+        "completed_parts": list(job.completed_parts),
     }
 
 
@@ -342,6 +354,7 @@ def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
         "cancel_requested": bool(record.get("cancel_requested")),
         "result": record.get("result"),
         "error": record.get("error"),
+        "completed_parts": list(record.get("completed_parts") or []),
     }
 
 
@@ -422,10 +435,24 @@ async def run_destination_job(job_id: str) -> None:
             results: list[str] = []
             async for part in parts:
                 try:
-                    results.append(
-                        await upload_one(part.filename, file_stream(part.path), content_type)
+                    uploaded_result = await upload_one(
+                        part.filename,
+                        file_stream(part.path),
+                        content_type,
                     )
+                    part_sha256 = await asyncio.to_thread(file_sha256, part.path)
+                    results.append(uploaded_result)
                     job.files_completed += 1
+                    job.completed_parts.append(
+                        {
+                            "part_number": job.files_completed,
+                            "filename": part.filename,
+                            "size_bytes": part.size_bytes,
+                            "sha256": part_sha256,
+                            "result": uploaded_result,
+                        }
+                    )
+                    persist_job(job, force=True)
                 finally:
                     if os.path.exists(part.path):
                         os.unlink(part.path)

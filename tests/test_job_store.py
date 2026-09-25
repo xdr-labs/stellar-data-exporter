@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -98,3 +99,66 @@ def test_job_store_survives_reopen_and_marks_active_jobs_interrupted(tmp_path):
     assert recovered["status"] == "interrupted"
     assert recovered["completed_at"] is not None
     assert "restarted" in recovered["error"]
+
+
+def test_job_store_migrates_existing_database_for_completed_part_checkpoints(tmp_path):
+    path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE export_jobs (
+                job_id TEXT PRIMARY KEY,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                status TEXT NOT NULL,
+                started_at REAL,
+                completed_at REAL,
+                bytes_sent INTEGER NOT NULL DEFAULT 0,
+                records_exported INTEGER NOT NULL DEFAULT 0,
+                files_completed INTEGER NOT NULL DEFAULT 0,
+                query_count INTEGER NOT NULL DEFAULT 0,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                current_slice_start TEXT,
+                current_slice_end TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                result TEXT,
+                error TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+
+    store = JobStore(path)
+    columns = {
+        row[1]
+        for row in sqlite3.connect(path).execute("PRAGMA table_info(export_jobs)").fetchall()
+    }
+    assert "checkpoint_json" in columns
+
+    record = {
+        "job_id": "migrated",
+        "created_at": time.time(),
+        "status": "failed",
+        "started_at": None,
+        "completed_at": time.time(),
+        "bytes_sent": 10,
+        "records_exported": 1,
+        "files_completed": 1,
+        "query_count": 1,
+        "retry_count": 0,
+        "current_slice_start": None,
+        "current_slice_end": None,
+        "cancel_requested": False,
+        "result": None,
+        "error": "later part failed",
+        "metadata": {"destination_type": "s3"},
+        "completed_parts": [{
+            "part_number": 1,
+            "filename": "export-0001.json",
+            "size_bytes": 10,
+            "sha256": "abc123",
+            "result": "s3://exports/export-0001.json",
+        }],
+    }
+    store.save(record)
+    assert store.get("migrated")["completed_parts"] == record["completed_parts"]

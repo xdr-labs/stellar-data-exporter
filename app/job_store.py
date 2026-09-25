@@ -44,10 +44,20 @@ class JobStore:
                     cancel_requested INTEGER NOT NULL DEFAULT 0,
                     result TEXT,
                     error TEXT,
-                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    checkpoint_json TEXT NOT NULL DEFAULT '[]'
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(export_jobs)").fetchall()
+            }
+            if "checkpoint_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE export_jobs "
+                    "ADD COLUMN checkpoint_json TEXT NOT NULL DEFAULT '[]'"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_export_jobs_created_at "
                 "ON export_jobs(created_at DESC)"
@@ -63,6 +73,12 @@ class JobStore:
                 separators=(",", ":"),
                 sort_keys=True,
             ),
+            "checkpoint_json": json.dumps(
+                record.get("completed_parts", []),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
             "cancel_requested": int(bool(record.get("cancel_requested"))),
         }
         with self._connect() as connection:
@@ -72,12 +88,12 @@ class JobStore:
                     job_id, created_at, updated_at, status, started_at, completed_at,
                     bytes_sent, records_exported, files_completed, query_count,
                     retry_count, current_slice_start, current_slice_end,
-                    cancel_requested, result, error, metadata_json
+                    cancel_requested, result, error, metadata_json, checkpoint_json
                 ) VALUES (
                     :job_id, :created_at, :updated_at, :status, :started_at, :completed_at,
                     :bytes_sent, :records_exported, :files_completed, :query_count,
                     :retry_count, :current_slice_start, :current_slice_end,
-                    :cancel_requested, :result, :error, :metadata_json
+                    :cancel_requested, :result, :error, :metadata_json, :checkpoint_json
                 )
                 ON CONFLICT(job_id) DO UPDATE SET
                     updated_at=excluded.updated_at,
@@ -94,7 +110,8 @@ class JobStore:
                     cancel_requested=excluded.cancel_requested,
                     result=excluded.result,
                     error=excluded.error,
-                    metadata_json=excluded.metadata_json
+                    metadata_json=excluded.metadata_json,
+                    checkpoint_json=excluded.checkpoint_json
                 """,
                 values,
             )
@@ -105,6 +122,7 @@ class JobStore:
         item = dict(row)
         item["cancel_requested"] = bool(item["cancel_requested"])
         item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        item["completed_parts"] = json.loads(item.pop("checkpoint_json", "[]") or "[]")
         return item
 
     def get(self, job_id: str) -> dict[str, Any] | None:
