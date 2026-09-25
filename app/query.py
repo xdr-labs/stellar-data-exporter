@@ -67,6 +67,14 @@ def total_hits(response: dict[str, Any]) -> tuple[int, bool]:
     return 0, False
 
 
+def hit_identity(hit: dict[str, Any]) -> tuple[str, str] | None:
+    index = hit.get("_index")
+    document_id = hit.get("_id")
+    if isinstance(index, str) and index and isinstance(document_id, str) and document_id:
+        return index, document_id
+    return None
+
+
 def hit_source(hit: dict[str, Any]) -> dict[str, Any]:
     source = hit.get("_source")
     if isinstance(source, dict):

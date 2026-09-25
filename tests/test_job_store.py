@@ -134,6 +134,7 @@ def test_job_store_migrates_existing_database_for_completed_part_checkpoints(tmp
         for row in sqlite3.connect(path).execute("PRAGMA table_info(export_jobs)").fetchall()
     }
     assert "checkpoint_json" in columns
+    assert "duplicates_skipped" in columns
 
     record = {
         "job_id": "migrated",

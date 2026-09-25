@@ -39,6 +39,7 @@ class JobStore:
                     files_completed INTEGER NOT NULL DEFAULT 0,
                     query_count INTEGER NOT NULL DEFAULT 0,
                     retry_count INTEGER NOT NULL DEFAULT 0,
+                    duplicates_skipped INTEGER NOT NULL DEFAULT 0,
                     current_slice_start TEXT,
                     current_slice_end TEXT,
                     cancel_requested INTEGER NOT NULL DEFAULT 0,
@@ -57,6 +58,11 @@ class JobStore:
                 connection.execute(
                     "ALTER TABLE export_jobs "
                     "ADD COLUMN checkpoint_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "duplicates_skipped" not in columns:
+                connection.execute(
+                    "ALTER TABLE export_jobs "
+                    "ADD COLUMN duplicates_skipped INTEGER NOT NULL DEFAULT 0"
                 )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_export_jobs_created_at "
@@ -79,6 +85,7 @@ class JobStore:
                 separators=(",", ":"),
                 sort_keys=True,
             ),
+            "duplicates_skipped": int(record.get("duplicates_skipped") or 0),
             "cancel_requested": int(bool(record.get("cancel_requested"))),
         }
         with self._connect() as connection:
@@ -87,12 +94,12 @@ class JobStore:
                 INSERT INTO export_jobs (
                     job_id, created_at, updated_at, status, started_at, completed_at,
                     bytes_sent, records_exported, files_completed, query_count,
-                    retry_count, current_slice_start, current_slice_end,
+                    retry_count, duplicates_skipped, current_slice_start, current_slice_end,
                     cancel_requested, result, error, metadata_json, checkpoint_json
                 ) VALUES (
                     :job_id, :created_at, :updated_at, :status, :started_at, :completed_at,
                     :bytes_sent, :records_exported, :files_completed, :query_count,
-                    :retry_count, :current_slice_start, :current_slice_end,
+                    :retry_count, :duplicates_skipped, :current_slice_start, :current_slice_end,
                     :cancel_requested, :result, :error, :metadata_json, :checkpoint_json
                 )
                 ON CONFLICT(job_id) DO UPDATE SET
@@ -105,6 +112,7 @@ class JobStore:
                     files_completed=excluded.files_completed,
                     query_count=excluded.query_count,
                     retry_count=excluded.retry_count,
+                    duplicates_skipped=excluded.duplicates_skipped,
                     current_slice_start=excluded.current_slice_start,
                     current_slice_end=excluded.current_slice_end,
                     cancel_requested=excluded.cancel_requested,

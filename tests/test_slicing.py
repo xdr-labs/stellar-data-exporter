@@ -98,3 +98,50 @@ async def test_engine_honors_cancellation_during_record_iteration():
 
     assert len(records) == 1
     assert emitted == 1
+
+
+class DuplicateIdentityClient:
+    async def search(self, index, body):
+        if body["size"] == 0:
+            return {
+                "hits": {
+                    "total": {"value": 4, "relation": "eq"},
+                    "hits": [],
+                }
+            }
+        return {
+            "hits": {
+                "total": {"value": 4, "relation": "eq"},
+                "hits": [
+                    {"_index": "idx-a", "_id": "1", "_source": {"n": 1}},
+                    {"_index": "idx-a", "_id": "1", "_source": {"n": 1}},
+                    {"_index": "idx-b", "_id": "1", "_source": {"n": 2}},
+                    {"_source": {"n": 3}},
+                ],
+            }
+        }
+
+
+@pytest.mark.asyncio
+async def test_engine_deduplicates_only_stable_index_and_document_identity():
+    duplicates = 0
+
+    def on_duplicate():
+        nonlocal duplicates
+        duplicates += 1
+
+    engine = ExportEngine(
+        DuplicateIdentityClient(),
+        index="idx-*",
+        raw_query={"query": {"match_all": {}}},
+        time_field="timestamp",
+        start=datetime(2026, 9, 1, 0, 0, tzinfo=UTC),
+        end=datetime(2026, 9, 1, 0, 0, 1, tzinfo=UTC),
+        target_records=10,
+        minimum_slice_ms=1,
+        on_duplicate=on_duplicate,
+    )
+    records = [record async for record in engine.iter_documents()]
+
+    assert records == [{"n": 1}, {"n": 2}, {"n": 3}]
+    assert duplicates == 1

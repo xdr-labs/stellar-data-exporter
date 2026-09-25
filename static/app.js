@@ -1251,6 +1251,7 @@ function renderExportProgress(status) {
   $("progressFiles").textContent = Number(status.files_completed || 0).toLocaleString();
   $("progressQueries").textContent = Number(status.query_count || 0).toLocaleString();
   $("progressRetries").textContent = Number(status.retry_count || 0).toLocaleString();
+  $("progressDuplicates").textContent = Number(status.duplicates_skipped || 0).toLocaleString();
   $("progressElapsed").textContent = humanDuration(status.elapsed_seconds);
   const rate = Number(status.rate_records_per_second || 0);
   $("progressRate").textContent = `${rate.toFixed(rate >= 10 ? 1 : 2)} rec/s`;

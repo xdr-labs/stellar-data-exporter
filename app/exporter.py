@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .query import build_document_query, hit_source, total_hits
+from .query import build_document_query, hit_identity, hit_source, total_hits
 from .stellar import StellarClient
 
 
@@ -108,6 +108,7 @@ class ExportEngine:
         on_query: Callable[[], None] | None = None,
         on_slice: Callable[[datetime, datetime], None] | None = None,
         on_record: Callable[[], None] | None = None,
+        on_duplicate: Callable[[], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ):
         self.client = client
@@ -122,6 +123,7 @@ class ExportEngine:
         self.on_query = on_query
         self.on_slice = on_slice
         self.on_record = on_record
+        self.on_duplicate = on_duplicate
         self.cancel_check = cancel_check
 
     def _check_cancelled(self) -> None:
@@ -149,7 +151,11 @@ class ExportEngine:
             raise RuntimeError("Stellar Cyber did not return an exact hit count")
         return count
 
-    async def _fetch(self, start: datetime, end: datetime) -> tuple[list[dict[str, Any]], int]:
+    async def _fetch(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[list[tuple[dict[str, Any], tuple[str, str] | None]], int]:
         body = build_document_query(
             self.raw_query,
             time_field=self.time_field,
@@ -164,11 +170,15 @@ class ExportEngine:
         if not exact:
             raise RuntimeError("Stellar Cyber did not return an exact hit count")
         hits = response.get("hits", {}).get("hits", [])
-        return [hit_source(hit) for hit in hits], count
+        return [
+            (hit_source(hit), hit_identity(hit))
+            for hit in hits
+        ], count
 
     async def iter_documents(self) -> AsyncIterator[dict[str, Any]]:
         stack: list[tuple[datetime, datetime]] = [(self.start, self.end)]
         emitted = 0
+        seen_identities: set[tuple[str, str]] = set()
         while stack:
             self._check_cancelled()
             start, end = stack.pop()
@@ -201,8 +211,14 @@ class ExportEngine:
                 stack.append((start, midpoint))
                 continue
 
-            for record in records:
+            for record, identity in records:
                 self._check_cancelled()
+                if identity is not None:
+                    if identity in seen_identities:
+                        if self.on_duplicate:
+                            self.on_duplicate()
+                        continue
+                    seen_identities.add(identity)
                 if self.max_records is not None and emitted >= self.max_records:
                     return
                 emitted += 1
