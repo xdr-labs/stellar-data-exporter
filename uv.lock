@@ -614,6 +614,7 @@ source = { editable = "." }
 dependencies = [
     { name = "asyncssh" },
     { name = "boto3" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "uvicorn", extra = ["standard"] },
@@ -629,6 +630,7 @@ dev = [
 requires-dist = [
     { name = "asyncssh", specifier = ">=2.18,<3" },
     { name = "boto3", specifier = ">=1.35,<2" },
+    { name = "cryptography", specifier = ">=45,<51" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<9" },
