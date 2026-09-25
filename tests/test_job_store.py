@@ -70,6 +70,16 @@ def test_sanitized_metadata_excludes_sftp_secrets():
     assert '"destination_type": "sftp"' in serialized
 
 
+def test_job_store_creates_private_state_directory(tmp_path):
+    state_dir = tmp_path / "state"
+    path = state_dir / "jobs.sqlite3"
+
+    JobStore(path)
+
+    assert state_dir.stat().st_mode & 0o777 == 0o700
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 def test_job_store_survives_reopen_and_marks_active_jobs_interrupted(tmp_path):
     path = tmp_path / "jobs.sqlite3"
     store = JobStore(path)

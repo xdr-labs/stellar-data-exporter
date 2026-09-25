@@ -8,6 +8,19 @@ from cryptography.fernet import Fernet
 from app.schedule_store import ScheduleCipher, ScheduleStore
 
 
+def test_schedule_state_directory_is_private(tmp_path):
+    state_dir = tmp_path / "state"
+    key_path = state_dir / "schedule.key"
+    db_path = state_dir / "schedules.sqlite3"
+
+    ScheduleCipher.from_environment(key_path)
+    ScheduleStore(db_path)
+
+    assert state_dir.stat().st_mode & 0o777 == 0o700
+    assert key_path.stat().st_mode & 0o777 == 0o600
+    assert db_path.stat().st_mode & 0o777 == 0o600
+
+
 def test_schedule_cipher_and_store_keep_payload_encrypted_across_reopen(tmp_path):
     key_path = tmp_path / "schedule.key"
     db_path = tmp_path / "schedules.sqlite3"

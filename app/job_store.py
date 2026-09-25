@@ -8,13 +8,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .paths import ensure_private_directory
+
 
 class JobStore:
     """Small SQLite-backed store for sanitized export job metadata."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.path.parent)
         self._initialize()
         os.chmod(self.path, 0o600)
 

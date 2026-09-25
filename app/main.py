@@ -67,7 +67,6 @@ from .stellar import (
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
-BASE_DIR = PACKAGE_DIR.parent
 STATIC_DIR = PACKAGE_DIR / "static"
 STATE_DIR = default_state_dir(PACKAGE_DIR)
 DOWNLOAD_JOB_TTL_SECONDS = 600

@@ -9,6 +9,8 @@ from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from .paths import ensure_private_directory
+
 
 class ScheduleCipher:
     def __init__(self, key: bytes):
@@ -21,7 +23,7 @@ class ScheduleCipher:
             return cls(configured.strip().encode("ascii"))
 
         path = Path(key_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(path.parent)
         if path.exists():
             key = path.read_bytes().strip()
         else:
@@ -51,7 +53,7 @@ class ScheduleCipher:
 class ScheduleStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.path.parent)
         self._initialize()
         os.chmod(self.path, 0o600)
 
