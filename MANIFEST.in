@@ -1,0 +1,13 @@
+include README.md
+include AGENTS.md
+include pyproject.toml
+include uv.lock
+include .engineering/project.yaml
+include .engineering/tests.yaml
+include .engineering/release.yaml
+recursive-include app/static *
+recursive-include deploy *
+recursive-include docs *
+recursive-include scripts *.sh
+recursive-include schemas *.json
+recursive-include tools *.py

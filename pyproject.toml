@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "stellar-data-exporter"
 version = "0.1.0"
 description = "Web UI for exporting Stellar Cyber query results as CSV or JSON."
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "asyncssh>=2.18,<3",
@@ -16,6 +17,10 @@ dependencies = [
   "uvicorn[standard]>=0.30,<1",
 ]
 
+[project.urls]
+Repository = "https://github.com/xdr-labs/stellar-data-exporter"
+Issues = "https://github.com/xdr-labs/stellar-data-exporter/issues"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8,<9",
@@ -23,8 +28,11 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["app"]
-include-package-data = true
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["app"]
+namespaces = false
 
 [tool.setuptools.package-data]
 app = ["static/*"]
