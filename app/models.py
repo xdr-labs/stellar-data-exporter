@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 class ConnectionInput(BaseModel):
     host: HttpUrl
+    email: str = Field(min_length=3)
     token: str = Field(min_length=1)
     verify_tls: bool = True
     test_index: str = "aella-ser-*"
@@ -13,6 +14,7 @@ class ConnectionInput(BaseModel):
 
 class QueryInput(BaseModel):
     host: HttpUrl
+    email: str = Field(min_length=3)
     token: str = Field(min_length=1)
     verify_tls: bool = True
     index: str = Field(min_length=1)

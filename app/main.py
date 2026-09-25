@@ -48,7 +48,12 @@ app = FastAPI(title="Stellar Data Exporter", version="0.1.0")
 
 
 def client_for(payload: ConnectionInput | QueryInput) -> StellarClient:
-    return StellarClient(str(payload.host), payload.token, payload.verify_tls)
+    return StellarClient(
+        str(payload.host),
+        payload.email,
+        payload.token,
+        payload.verify_tls,
+    )
 
 
 def cleanup_jobs() -> None:
@@ -211,6 +216,13 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
     rows = [hit_source(hit) for hit in response.get("hits", {}).get("hits", [])]
     sample_bytes = sum(len(str(row).encode("utf-8")) for row in rows)
     estimated_bytes = int((sample_bytes / max(len(rows), 1)) * total) if rows else 0
+    warnings = []
+    if payload.index.endswith("-*") and (payload.end - payload.start).total_seconds() > 86400:
+        warnings.append(
+            "Open wildcard index over more than 24 hours may scan many historical shards. "
+            "Prefer a date-scoped/date-math index expression when the index family supports it."
+        )
+
     return {
         "ok": True,
         "total": total,
@@ -218,6 +230,7 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
         "took_ms": response.get("took"),
         "estimated_bytes": estimated_bytes,
         "rows": rows,
+        "warnings": warnings,
     }
 
 

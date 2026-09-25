@@ -67,11 +67,13 @@ function basePayload() {
   if (!start || !end) throw new Error("Start and end time are required.");
   if (new Date(end) <= new Date(start)) throw new Error("End time must be later than start time.");
   if (!$("host").value.trim()) throw new Error("Stellar Cyber host is required.");
-  if (!$("token").value.trim()) throw new Error("API key / token is required.");
+  if (!$("email").value.trim()) throw new Error("Stellar Cyber account email is required.");
+  if (!$("token").value.trim()) throw new Error("All-Access Token is required.");
   if (!$("indexName").value.trim()) throw new Error("Index is required.");
 
   return {
     host: $("host").value.trim(),
+    email: $("email").value.trim(),
     token: $("token").value.trim(),
     verify_tls: $("verifyTls").checked,
     index: $("indexName").value.trim(),
@@ -227,13 +229,16 @@ function updateSummary() {
 async function testConnection() {
   const button = $("testConnection");
   try {
-    if (!$("host").value.trim() || !$("token").value.trim()) throw new Error("Host and token are required.");
+    if (!$("host").value.trim() || !$("email").value.trim() || !$("token").value.trim()) {
+      throw new Error("Host, account email, and All-Access Token are required.");
+    }
     setBusy(button, true, "Testing…");
     setStatus("connectionStatus", "Testing connection…");
     const result = await api("/api/connection/test", {
       method: "POST",
       body: JSON.stringify({
         host: $("host").value.trim(),
+        email: $("email").value.trim(),
         token: $("token").value.trim(),
         verify_tls: $("verifyTls").checked,
         test_index: $("indexName").value.trim() || "aella-ser-*",
@@ -288,7 +293,15 @@ async function previewQuery() {
     $("estimatedSize").textContent = humanBytes(result.estimated_bytes);
     $("queryTime").textContent = result.took_ms == null ? "—" : `${result.took_ms} ms`;
     renderPreview(result.rows);
-    setStatus("queryStatus", `Preview loaded: ${result.rows.length} rows shown.`, "success");
+    if (result.warnings?.length) {
+      setStatus(
+        "queryStatus",
+        `Preview loaded: ${result.rows.length} rows shown. Warning: ${result.warnings.join(" ")}`,
+        "warning",
+      );
+    } else {
+      setStatus("queryStatus", `Preview loaded: ${result.rows.length} rows shown.`, "success");
+    }
     updateSummary();
   } catch (error) {
     setStatus("queryStatus", error.message, "error");

@@ -18,21 +18,25 @@
         <div>
           <p class="eyebrow">STELLAR CYBER QUERY EXPORT</p>
           <h1>Query once. Export safely in chunks.</h1>
-          <p>Provide your Stellar host, token, Elasticsearch DSL and time range. The exporter slices large ranges automatically.</p>
+          <p>Provide your Stellar host, root-scope All-Access Token, Elasticsearch DSL and time range. Large ranges are sliced automatically.</p>
         </div>
         <div class="health" id="serviceHealth"><span class="dot"></span> service ready</div>
       </div>
 
       <section class="card">
-        <div class="section-title"><span class="step">1</span><div><h2>Stellar Cyber</h2><p>Connection credentials are never stored by the application.</p></div></div>
+        <div class="section-title"><span class="step">1</span><div><h2>Stellar Cyber</h2><p>Raw index queries require a Super Admin with root scope. Credentials are kept in process memory only.</p></div></div>
         <div class="grid two">
           <label>Host
             <input id="host" type="url" placeholder="https://customer.stellarcyber.cloud" autocomplete="off" />
           </label>
-          <label>API Key / All-Access Token
-            <input id="token" type="password" placeholder="Paste token for this session" autocomplete="off" />
+          <label>Account email
+            <input id="email" type="email" placeholder="admin@example.com" autocomplete="off" />
           </label>
         </div>
+        <label>All-Access Token
+          <input id="token" type="password" placeholder="Generate Token from Stellar Cyber user settings" autocomplete="off" />
+        </label>
+        <p class="hint">The exporter exchanges this credential for a short-lived JWT and refreshes it automatically during long exports.</p>
         <div class="row between">
           <label class="check"><input id="verifyTls" type="checkbox" checked /> Verify TLS certificate</label>
           <button id="testConnection" class="button secondary">Test connection</button>

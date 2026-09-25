@@ -30,6 +30,7 @@ def payload():
     end = start + timedelta(minutes=5)
     return {
         "host": "https://stellar.example.test",
+        "email": "admin@example.test",
         "token": "test-token",
         "verify_tls": True,
         "index": "aella-ser-*",

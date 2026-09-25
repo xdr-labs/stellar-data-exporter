@@ -7,7 +7,9 @@ A lightweight web UI for exporting Stellar Cyber query results as CSV or JSON.
 The first working slice is intentionally small:
 
 - no application login or user database
-- Stellar Cyber host + API token supplied per browser session
+- Stellar Cyber host + account email + root-scope All-Access Token supplied per browser session
+- automatic exchange of the All-Access Token for a short-lived JWT
+- automatic JWT refresh before expiry and one retry after HTTP 401
 - user-supplied Elasticsearch DSL
 - explicit start/end time range
 - query validation and 100-record preview
@@ -23,9 +25,11 @@ The first working slice is intentionally small:
 
 ```text
 Browser
-  -> host / token / index / DSL / time range
+  -> host / email / All-Access Token / index / DSL / time range
   -> FastAPI
-  -> Stellar Cyber /connect/api/data/{index}/_search
+  -> POST /connect/api/v1/access_token using Basic(email:token)
+  -> short-lived JWT
+  -> GET /connect/api/data/{index}/_search using Bearer JWT
   -> adaptive non-overlapping time slices
   -> CSV or JSON stream
   -> one-time browser download
@@ -34,6 +38,11 @@ Browser
 The exporter injects the requested time range around the user's query. A slice is counted first.
 If the slice exceeds the configured target record count, it is bisected and retried until a safe
 slice is reached. Ranges use half-open boundaries `[start, end)`, avoiding overlap duplicates.
+
+Time slicing limits records returned per request, but it does not by itself reduce Elasticsearch
+shard fan-out from a broad index such as `aella-wineventlog-*`. For long ranges, use a date-scoped
+or date-math index expression when that Stellar index family supports it; the UI warns on open
+wildcards spanning more than 24 hours.
 
 ## Security boundary
 
@@ -44,17 +53,15 @@ slice is reached. Ranges use half-open boundaries `[start, end)`, avoiding overl
 - there is currently no multi-user isolation layer; deploy this MVP only in a trusted environment
 - never expose the service directly to the public Internet in its current development state
 
-## Known API assumption
+## Stellar Cyber API authentication
 
-The current adapter treats the supplied Stellar credential as a bearer token and sends:
+Raw Elasticsearch index queries are intended for Super Admin users with root scope and an
+All-Access Token. Scoped API keys are not supported by the raw `/connect/api/data` endpoint.
 
-```http
-Authorization: Bearer <token>
-POST /connect/api/data/<index>/_search
-```
-
-This matches the All-Access Token path used for Stellar Cyber raw index queries. If a deployment
-requires API-key-to-token exchange, that should be added as a separate authentication adapter.
+The adapter exchanges the account email and All-Access Token at
+`/connect/api/v1/access_token`, caches the returned JWT for less than its documented
+10-minute lifetime, and refreshes automatically during long-running exports. A 401 from
+the data API forces one immediate JWT refresh and retry.
 
 ## Run on dev-atlas
 
