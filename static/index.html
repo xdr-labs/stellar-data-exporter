@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Stellar Data Exporter</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">S</span><span>Stellar Data Exporter</span></div>
+    <div class="top-actions"><span class="pill">No login · credentials stay in memory</span></div>
+  </header>
+
+  <main class="layout">
+    <section class="content">
+      <div class="hero">
+        <div>
+          <p class="eyebrow">STELLAR CYBER QUERY EXPORT</p>
+          <h1>Query once. Export safely in chunks.</h1>
+          <p>Provide your Stellar host, token, Elasticsearch DSL and time range. The exporter slices large ranges automatically.</p>
+        </div>
+        <div class="health" id="serviceHealth"><span class="dot"></span> service ready</div>
+      </div>
+
+      <section class="card">
+        <div class="section-title"><span class="step">1</span><div><h2>Stellar Cyber</h2><p>Connection credentials are never stored by the application.</p></div></div>
+        <div class="grid two">
+          <label>Host
+            <input id="host" type="url" placeholder="https://customer.stellarcyber.cloud" autocomplete="off" />
+          </label>
+          <label>API Key / All-Access Token
+            <input id="token" type="password" placeholder="Paste token for this session" autocomplete="off" />
+          </label>
+        </div>
+        <div class="row between">
+          <label class="check"><input id="verifyTls" type="checkbox" checked /> Verify TLS certificate</label>
+          <button id="testConnection" class="button secondary">Test connection</button>
+        </div>
+        <div id="connectionStatus" class="status hidden"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-title"><span class="step">2</span><div><h2>Query</h2><p>Paste a query you wrote yourself or generated with any AI tool.</p></div></div>
+        <div class="grid query-grid">
+          <label>Index
+            <input id="indexName" value="aella-ser-*" spellcheck="false" />
+          </label>
+          <label>Time field
+            <input id="timeField" value="timestamp" spellcheck="false" />
+          </label>
+        </div>
+        <div class="grid two">
+          <label>Start
+            <input id="startTime" type="datetime-local" step="1" />
+          </label>
+          <label>End
+            <input id="endTime" type="datetime-local" step="1" />
+          </label>
+        </div>
+        <label>Elasticsearch DSL
+          <textarea id="queryDsl" spellcheck="false">{
+  "query": {
+    "match_all": {}
+  }
+}</textarea>
+        </label>
+        <div class="row between wrap">
+          <div id="queryStatus" class="status compact">Ready to validate.</div>
+          <div class="row">
+            <button id="validateQuery" class="button secondary">Validate JSON</button>
+            <button id="previewQuery" class="button primary">Preview 100 records</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="previewCard">
+        <div class="section-title"><span class="step">3</span><div><h2>Preview</h2><p>Preview before starting a large export.</p></div></div>
+        <div class="metrics">
+          <div><span>Matched records</span><strong id="recordCount">—</strong></div>
+          <div><span>Estimated size</span><strong id="estimatedSize">—</strong></div>
+          <div><span>Query time</span><strong id="queryTime">—</strong></div>
+        </div>
+        <div class="table-wrap">
+          <table id="previewTable">
+            <thead><tr><th>Run Preview to inspect data</th></tr></thead>
+            <tbody><tr><td class="muted">No data loaded yet.</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-title"><span class="step">4</span><div><h2>Output</h2><p>CSV and JSON are streamed; large time ranges are adaptively sliced.</p></div></div>
+        <div class="format-grid">
+          <label class="choice selected"><input type="radio" name="format" value="csv" checked /><span><b>CSV</b><small>Nested objects flatten to dot notation.</small></span></label>
+          <label class="choice"><input type="radio" name="format" value="json" /><span><b>JSON</b><small>Streams a valid JSON array.</small></span></label>
+        </div>
+        <div class="grid two">
+          <label>Filename
+            <input id="filename" value="stellar-export" />
+          </label>
+          <label class="check large"><input id="compress" type="checkbox" checked /> gzip compression</label>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-title"><span class="step">5</span><div><h2>Destination</h2><p>Choose a direct browser download, S3-compatible object storage, or SFTP.</p></div></div>
+        <div class="destination-grid">
+          <label class="destination selected"><input type="radio" name="destination" value="download" checked /><span class="dest-icon">↓</span><b>Download</b><small>Stream directly to this browser</small></label>
+          <label class="destination"><input type="radio" name="destination" value="s3" /><span class="dest-icon">☁</span><b>S3-compatible</b><small>AWS S3 · R2 · MinIO</small></label>
+          <label class="destination"><input type="radio" name="destination" value="sftp" /><span class="dest-icon">⇄</span><b>SFTP</b><small>SSH key or password</small></label>
+        </div>
+
+        <div id="s3Panel" class="destination-panel hidden">
+          <div class="grid two">
+            <label>Endpoint URL
+              <input id="s3Endpoint" placeholder="Blank for AWS S3" />
+            </label>
+            <label>Region
+              <input id="s3Region" placeholder="ap-northeast-2" />
+            </label>
+            <label>Bucket
+              <input id="s3Bucket" placeholder="security-export" />
+            </label>
+            <label>Prefix
+              <input id="s3Prefix" placeholder="stellar/exports/" />
+            </label>
+            <label>Access key
+              <input id="s3AccessKey" autocomplete="off" />
+            </label>
+            <label>Secret key
+              <input id="s3SecretKey" type="password" autocomplete="off" />
+            </label>
+          </div>
+          <div class="row between">
+            <label class="check"><input id="s3PathStyle" type="checkbox" /> Force path-style addressing</label>
+            <button id="testDestination" class="button secondary">Test destination</button>
+          </div>
+          <div id="destinationStatus" class="status hidden"></div>
+        </div>
+
+        <div id="sftpPanel" class="destination-panel hidden">
+          <div class="grid two">
+            <label>Host
+              <input id="sftpHost" placeholder="sftp.customer.com" />
+            </label>
+            <label>Port
+              <input id="sftpPort" type="number" value="22" min="1" max="65535" />
+            </label>
+            <label>Username
+              <input id="sftpUsername" autocomplete="off" />
+            </label>
+            <label>Remote directory
+              <input id="sftpRemotePath" value="/exports" />
+            </label>
+            <label>Authentication
+              <select id="sftpAuthMethod">
+                <option value="private_key">SSH private key</option>
+                <option value="password">Password</option>
+              </select>
+            </label>
+            <label id="sftpPasswordLabel" class="hidden">Password
+              <input id="sftpPassword" type="password" autocomplete="off" />
+            </label>
+          </div>
+          <label id="sftpKeyLabel">Private key
+            <textarea id="sftpPrivateKey" class="secret-area" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+          </label>
+          <div class="row between">
+            <label class="check"><input id="sftpVerifyHostKey" type="checkbox" checked /> Verify SSH host key</label>
+            <button id="testSftpDestination" class="button secondary">Test destination</button>
+          </div>
+          <div id="sftpDestinationStatus" class="status hidden"></div>
+        </div>
+
+        <details>
+          <summary>Advanced export settings</summary>
+          <div class="grid two advanced">
+            <label>Target records / slice
+              <input id="targetRecords" type="number" min="100" max="50000" value="5000" />
+            </label>
+            <label>Minimum slice (ms)
+              <input id="minimumSlice" type="number" min="1" max="60000" value="1" />
+            </label>
+          </div>
+          <p class="hint">If a slice still exceeds the target, it is divided again until it can be fetched safely.</p>
+        </details>
+      </section>
+    </section>
+
+    <aside class="summary-card">
+      <p class="eyebrow">EXPORT SUMMARY</p>
+      <div class="summary-row"><span>Source</span><strong id="summaryHost">Not set</strong></div>
+      <div class="summary-row"><span>Index</span><strong id="summaryIndex">aella-ser-*</strong></div>
+      <div class="summary-row"><span>Range</span><strong id="summaryRange">—</strong></div>
+      <div class="summary-row"><span>Matched</span><strong id="summaryRecords">Preview required</strong></div>
+      <div class="summary-row"><span>Output</span><strong id="summaryOutput">CSV · gzip</strong></div>
+      <div class="summary-row"><span>Destination</span><strong id="summaryDestination">Browser download</strong></div>
+      <div class="divider"></div>
+      <button id="runExport" class="button run">Run export</button>
+      <p class="summary-note">Credentials stay in memory only; remote-job credentials are discarded after completion.</p>
+      <div id="runStatus" class="status hidden"></div>
+    </aside>
+  </main>
+
+  <iframe id="downloadFrame" class="download-frame" title="download"></iframe>
+  <script src="/app.js"></script>
+</body>
+</html>

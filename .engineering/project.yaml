@@ -1,0 +1,30 @@
+engineering_system:
+  version: "1.6.5"
+  mode: adopted
+  baseline: "c16edb8c2a86f194f21c5ba16e5f75673a15ba5c"
+  ci_mode: "shared"
+  native_ci_workflows: []
+  merge_gate_status: "unknown"
+
+project:
+  name: "stellar-data-exporter"
+  type: "web-app"
+  maturity: "development"
+
+domains:
+  - "core"
+
+platforms:
+  - "linux"
+
+operations:
+  production_oriented: false
+  runbook_required: false
+  incident_response_required: false
+  persistent_state: false
+  runbook_paths: []
+  health_command: ""
+  backup_command: ""
+  restore_test_command: ""
+  upgrade_command: ""
+  rollback_command: ""

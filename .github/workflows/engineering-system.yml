@@ -1,0 +1,20 @@
+name: Engineering System
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  adoption-compliance:
+    uses: datarelay-labs/engineering-system/.github/workflows/adoption-compliance.yml@c16edb8c2a86f194f21c5ba16e5f75673a15ba5c
+
+  enforcement-reconcile:
+    uses: datarelay-labs/engineering-system/.github/workflows/enforcement-check.yml@c16edb8c2a86f194f21c5ba16e5f75673a15ba5c
+
+  affected-tests:
+    uses: datarelay-labs/engineering-system/.github/workflows/affected-tests.yml@c16edb8c2a86f194f21c5ba16e5f75673a15ba5c
+    with:
+      manifest_path: .engineering/tests.yaml
+      trigger: pr
