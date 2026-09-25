@@ -69,3 +69,42 @@ def test_preview_and_json_download(monkeypatch):
     assert download.headers["content-disposition"] == 'attachment; filename="alerts.json"'
     rows = download.json()
     assert [row["severity"] for row in rows] == [80, 90]
+
+
+def test_index_plan_endpoint_and_preview_use_date_scoped_target(monkeypatch):
+    seen = []
+
+    async def capture_search(self, index, body):
+        seen.append(index)
+        return {
+            "took": 1,
+            "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []},
+        }
+
+    monkeypatch.setattr(StellarClient, "search", capture_search)
+    client = TestClient(app)
+    request = payload()
+    request["sources"] = ["windows_events"]
+    request["start"] = datetime(2026, 9, 23, tzinfo=UTC).isoformat()
+    request["end"] = datetime(2026, 9, 26, tzinfo=UTC).isoformat()
+
+    plan = client.post(
+        "/api/query/index-plan",
+        json={
+            "sources": request["sources"],
+            "start": request["start"],
+            "end": request["end"],
+        },
+    )
+    assert plan.status_code == 200
+    assert plan.json()["sources"][0]["day_count"] == 3
+
+    preview = client.post("/api/query/preview", json=request)
+    assert preview.status_code == 200
+    assert seen == [
+        (
+            "aella-wineventlog-2026-09-23-*,"
+            "aella-wineventlog-2026-09-24-*,"
+            "aella-wineventlog-2026-09-25-*"
+        )
+    ]

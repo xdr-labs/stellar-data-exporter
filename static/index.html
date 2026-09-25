@@ -80,11 +80,16 @@
           </div>
         </div>
         <div class="resolved-indices">
-          <div>
-            <span>Resolved indices</span>
-            <small>Mapped automatically from the selected data sources</small>
+          <div class="resolved-index-header">
+            <div>
+              <span>Resolved indices</span>
+              <small>Date-scoped automatically when Stellar Cyber documents a safe daily pattern</small>
+            </div>
+            <button id="toggleActualIndices" class="button secondary small" type="button">Show actual indices</button>
           </div>
-          <code id="resolvedIndices">aella-ser-*</code>
+          <div id="resolvedIndexSummary" class="resolved-index-summary">Planning selected data sources…</div>
+          <code id="resolvedIndices" class="hidden">aella-ser-*</code>
+          <div id="indexPlanWarnings" class="index-plan-warnings hidden"></div>
         </div>
         <div class="grid two">
           <label>Start

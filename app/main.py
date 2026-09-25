@@ -29,10 +29,12 @@ from .models import (
     DestinationTestInput,
     DownloadDestination,
     ExportInput,
+    IndexPlanInput,
     QueryInput,
     S3Destination,
     SFTPDestination,
 )
+from .index_planner import plan_indices
 from .query import build_document_query, hit_source, total_hits
 from .sources import resolve_indices, source_catalog, source_labels
 from .stellar import (
@@ -101,7 +103,7 @@ def build_export_source(payload: ExportInput):
     client = client_for(payload)
     engine = ExportEngine(
         client,
-        index=resolve_indices(payload.sources),
+        index=plan_indices(payload.sources, start=payload.start, end=payload.end).target,
         raw_query=payload.query,
         time_field=payload.time_field,
         start=payload.start,
@@ -287,6 +289,15 @@ async def test_destination(payload: DestinationTestInput) -> dict[str, Any]:
     raise HTTPException(status_code=400, detail="Unsupported destination")
 
 
+@app.post("/api/query/index-plan")
+async def index_plan(payload: IndexPlanInput) -> dict[str, Any]:
+    return plan_indices(
+        payload.sources,
+        start=payload.start,
+        end=payload.end,
+    ).as_dict()
+
+
 @app.post("/api/query/preview")
 async def preview(payload: QueryInput) -> dict[str, Any]:
     body = build_document_query(
@@ -297,7 +308,8 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
         size=payload.preview_limit,
         track_total_hits=True,
     )
-    indices = resolve_indices(payload.sources)
+    index_plan_result = plan_indices(payload.sources, start=payload.start, end=payload.end)
+    indices = index_plan_result.target
     try:
         response = await client_for(payload).search(indices, body)
     except StellarAPIError as exc:
@@ -307,7 +319,7 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
     rows = [hit_source(hit) for hit in response.get("hits", {}).get("hits", [])]
     sample_bytes = sum(len(str(row).encode("utf-8")) for row in rows)
     estimated_bytes = int((sample_bytes / max(len(rows), 1)) * total) if rows else 0
-    warnings = []
+    warnings = list(index_plan_result.warnings)
     if (payload.end - payload.start).total_seconds() > 86400:
         warnings.append(
             "A range longer than 24 hours can scan many historical shards across the selected data sources. "
@@ -322,6 +334,7 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
         "estimated_bytes": estimated_bytes,
         "rows": rows,
         "warnings": warnings,
+        "index_plan": index_plan_result.as_dict(),
     }
 
 

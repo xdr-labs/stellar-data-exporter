@@ -17,6 +17,20 @@ class ConnectionInput(BaseModel):
     )
 
 
+class IndexPlanInput(BaseModel):
+    sources: list[DataSourceId] = Field(min_length=1)
+    start: datetime
+    end: datetime
+
+    @field_validator("end")
+    @classmethod
+    def validate_end(cls, end: datetime, info):
+        start = info.data.get("start")
+        if start is not None and end <= start:
+            raise ValueError("end must be later than start")
+        return end
+
+
 class QueryInput(BaseModel):
     host: HttpUrl
     email: str = Field(min_length=3)

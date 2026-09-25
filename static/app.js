@@ -4,6 +4,9 @@ const state = {
   previewTotal: null,
   estimatedBytes: null,
   sourceCatalog: [],
+  indexPlan: null,
+  indexPlanKey: null,
+  indexPlanRequest: 0,
 };
 
 function isoFromLocal(value) {
@@ -152,11 +155,92 @@ function buildEffectiveQuery() {
   return body;
 }
 
+function currentIndexPlanKey() {
+  const start = isoFromLocal($("startTime").value);
+  const end = isoFromLocal($("endTime").value);
+  const sources = selectedSources();
+  if (!start || !end || !sources.length || new Date(end) <= new Date(start)) return null;
+  return JSON.stringify({sources, start, end});
+}
+
+function renderIndexPlan() {
+  const key = currentIndexPlanKey();
+  const plan = key && state.indexPlanKey === key ? state.indexPlan : null;
+  const summary = $("resolvedIndexSummary");
+  const warningBox = $("indexPlanWarnings");
+
+  if (!selectedSources().length) {
+    summary.textContent = "Select at least one data source.";
+    $("resolvedIndices").textContent = "No data source selected";
+    warningBox.classList.add("hidden");
+    warningBox.textContent = "";
+    return null;
+  }
+
+  if (!key) {
+    summary.textContent = "Choose a valid start/end range to build the index plan.";
+    $("resolvedIndices").textContent = "Index plan unavailable";
+    warningBox.classList.add("hidden");
+    warningBox.textContent = "";
+    return null;
+  }
+
+  if (!plan) {
+    summary.textContent = "Planning selected data sources…";
+    $("resolvedIndices").textContent = "Planning…";
+    warningBox.classList.add("hidden");
+    warningBox.textContent = "";
+    return null;
+  }
+
+  summary.innerHTML = plan.sources.map((item) => {
+    const detail = item.mode === "daily"
+      ? `${item.day_count} daily range${item.day_count === 1 ? "" : "s"}`
+      : "Wildcard fallback";
+    return `<div class="resolved-index-item"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(detail)}</span></div>`;
+  }).join("");
+
+  $("resolvedIndices").textContent = plan.target;
+  if (plan.warnings?.length) {
+    warningBox.textContent = plan.warnings.join(" ");
+    warningBox.classList.remove("hidden");
+  } else {
+    warningBox.textContent = "";
+    warningBox.classList.add("hidden");
+  }
+  return plan;
+}
+
+async function refreshIndexPlan() {
+  const key = currentIndexPlanKey();
+  const requestId = ++state.indexPlanRequest;
+  state.indexPlan = null;
+  state.indexPlanKey = null;
+  renderIndexPlan();
+  renderEffectiveRequest();
+
+  if (!key) return;
+  const params = JSON.parse(key);
+  try {
+    const plan = await api("/api/query/index-plan", {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+    if (requestId !== state.indexPlanRequest || key !== currentIndexPlanKey()) return;
+    state.indexPlan = plan;
+    state.indexPlanKey = key;
+  } catch (error) {
+    if (requestId !== state.indexPlanRequest) return;
+    $("resolvedIndexSummary").textContent = `Index planner error: ${error.message}`;
+  }
+  renderIndexPlan();
+  renderEffectiveRequest();
+}
+
 function renderEffectiveRequest() {
-  const indices = selectedSourceIndices();
-  const resolved = indices.length ? indices.join(",") : "No data source selected";
-  $("resolvedIndices").textContent = resolved;
-  $("requestPath").textContent = `/connect/api/data/${indices.length ? resolved : "{select-data-source}"}/_search`;
+  const plan = renderIndexPlan();
+  const target = plan?.target;
+  $("requestPath").textContent = `/connect/api/data/${target || "{planning-index-plan}"}/_search`;
 
   try {
     $("effectiveDsl").value = JSON.stringify(buildEffectiveQuery(), null, 2);
@@ -435,6 +519,10 @@ async function previewQuery() {
     });
     state.previewTotal = result.total;
     state.estimatedBytes = result.estimated_bytes;
+    if (result.index_plan) {
+      state.indexPlan = result.index_plan;
+      state.indexPlanKey = currentIndexPlanKey();
+    }
     $("recordCount").textContent = Number(result.total).toLocaleString();
     $("estimatedSize").textContent = humanBytes(result.estimated_bytes);
     $("queryTime").textContent = result.took_ms == null ? "—" : `${result.took_ms} ms`;
@@ -524,9 +612,11 @@ function renderSources(items) {
     input.addEventListener("change", () => {
       input.closest(".source-option")?.classList.toggle("selected", input.checked);
       updateSummary();
+      refreshIndexPlan();
     });
   });
   updateSummary();
+  refreshIndexPlan();
 }
 
 async function loadDataSources() {
@@ -545,6 +635,7 @@ function setAllSources(checked) {
     input.closest(".source-option")?.classList.toggle("selected", checked);
   });
   updateSummary();
+  refreshIndexPlan();
 }
 
 function initialize() {
@@ -563,6 +654,16 @@ function initialize() {
   $("selectAllSources").addEventListener("click", () => setAllSources(true));
   $("clearSources").addEventListener("click", () => setAllSources(false));
   $("sftpAuthMethod").addEventListener("change", updateSftpAuthUI);
+  $("toggleActualIndices").addEventListener("click", () => {
+    const target = $("resolvedIndices");
+    const showing = !target.classList.contains("hidden");
+    target.classList.toggle("hidden", showing);
+    $("toggleActualIndices").textContent = showing ? "Show actual indices" : "Hide actual indices";
+  });
+  for (const id of ["startTime", "endTime"]) {
+    $(id).addEventListener("input", refreshIndexPlan);
+    $(id).addEventListener("change", refreshIndexPlan);
+  }
 
   document.querySelectorAll("input,textarea,select").forEach((el) => {
     el.addEventListener("input", updateSummary);
