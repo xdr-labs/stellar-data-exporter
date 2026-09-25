@@ -5,6 +5,10 @@ from collections.abc import Mapping
 from pathlib import Path
 
 
+def ensure_private_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
 def default_state_dir(
     package_dir: Path,
     *,
