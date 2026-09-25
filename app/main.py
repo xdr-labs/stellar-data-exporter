@@ -53,6 +53,7 @@ from .models import (
 )
 from .index_planner import plan_indices
 from .job_store import JobStore
+from .paths import default_state_dir
 from .schedule_store import ScheduleCipher, ScheduleStore
 from .query import build_document_query, compile_user_query, hit_source, total_hits
 from .sources import resolve_indices, source_catalog, source_labels
@@ -68,19 +69,20 @@ from .stellar import (
 PACKAGE_DIR = Path(__file__).resolve().parent
 BASE_DIR = PACKAGE_DIR.parent
 STATIC_DIR = PACKAGE_DIR / "static"
+STATE_DIR = default_state_dir(PACKAGE_DIR)
 DOWNLOAD_JOB_TTL_SECONDS = 600
 HISTORY_JOB_TTL_SECONDS = 3600
-JOB_DB_PATH = Path(os.environ.get("STELLAR_EXPORTER_JOB_DB", str(BASE_DIR / ".data" / "export-jobs.sqlite3")))
+JOB_DB_PATH = Path(os.environ.get("STELLAR_EXPORTER_JOB_DB", str(STATE_DIR / "export-jobs.sqlite3")))
 SCHEDULE_DB_PATH = Path(
     os.environ.get(
         "STELLAR_EXPORTER_SCHEDULE_DB",
-        str(BASE_DIR / ".data" / "export-schedules.sqlite3"),
+        str(STATE_DIR / "export-schedules.sqlite3"),
     )
 )
 SCHEDULE_KEY_PATH = Path(
     os.environ.get(
         "STELLAR_EXPORTER_SCHEDULE_KEY_FILE",
-        str(BASE_DIR / ".data" / "schedule.key"),
+        str(STATE_DIR / "schedule.key"),
     )
 )
 SCHEDULE_POLL_SECONDS = max(
