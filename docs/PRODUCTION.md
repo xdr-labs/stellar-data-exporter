@@ -184,16 +184,22 @@ Keep the state backup until the browser smoke test passes.
 
 ## 9. Backup and restore
 
-Back up the three files together while the service is stopped:
+Back up the three files together while the service is stopped. The bundled backup command creates
+the archive with mode `0600` and refuses to back up the production state directory while the
+service is active:
 
 ```bash
 sudo systemctl stop stellar-data-exporter
-sudo tar -C /var/lib -czf /secure-backup/stellar-data-exporter-state.tgz stellar-data-exporter
+sudo scripts/backup-state.sh \
+  /var/lib/stellar-data-exporter \
+  /secure-backup/stellar-data-exporter-state.tgz
+sudo scripts/restore-test.sh /secure-backup/stellar-data-exporter-state.tgz
 sudo systemctl start stellar-data-exporter
 ```
 
-A restore must include the same `schedule.key` (or the same externally managed Fernet key) used
-to encrypt the schedule database.
+The restore test rejects unsafe archive paths and runs SQLite `PRAGMA integrity_check` against
+the job and schedule databases when present. A restore must include the same `schedule.key`
+(or the same externally managed Fernet key) used to encrypt the schedule database.
 
 ## 10. Incident checks
 

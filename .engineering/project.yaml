@@ -24,7 +24,7 @@ operations:
   persistent_state: true
   runbook_paths: []
   health_command: ""
-  backup_command: ""
-  restore_test_command: ""
+  backup_command: "scripts/backup-state.sh /var/lib/stellar-data-exporter /var/backups/stellar-data-exporter-state.tgz"
+  restore_test_command: "scripts/restore-test.sh /var/backups/stellar-data-exporter-state.tgz"
   upgrade_command: ""
   rollback_command: ""

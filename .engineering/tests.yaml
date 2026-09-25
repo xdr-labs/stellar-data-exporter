@@ -1,6 +1,6 @@
 version: 1
 
-setup_command: "uv sync --extra dev"
+setup_command: "python -m pip install --disable-pip-version-check 'uv==0.12.18' && uv sync --extra dev"
 
 paths:
   "**":
