@@ -29,6 +29,8 @@ The first working slice is intentionally small:
 - cooperative cancellation with S3 multipart abort and SFTP partial-file cleanup
 - durable completed-part checkpoints for split S3/SFTP exports with filename, size, SHA-256, and remote result URI
 - resume/retry for failed, cancelled, or restart-interrupted remote jobs; verified completed split parts are skipped and credentials are re-entered rather than persisted
+- record-level duplicate suppression only when Stellar/Elasticsearch returns a stable `_index` + `_id`; records without stable identity are preserved to avoid false data loss
+- explicit overlap policy for matching export pipelines: manual exports default to `allow`, while Advanced mode can `reject` intersecting time ranges; adjacent half-open ranges remain valid
 - relative time presets (15m, 1h, 24h, 7d) plus custom relative ranges
 - saved export profiles in browser localStorage with credentials explicitly excluded
 - browser-local query history and favorites
@@ -49,7 +51,7 @@ Browser
 
 The exporter injects the requested time range around the user's query. A slice is counted first.
 If the slice exceeds the configured target record count, it is bisected and retried until a safe
-slice is reached. Ranges use half-open boundaries `[start, end)`, avoiding overlap duplicates.
+slice is reached. Ranges use half-open boundaries `[start, end)`, avoiding slice-boundary duplicates. When stable document identity is present, repeated `_index` + `_id` hits are skipped and counted in the live `Duplicates skipped` metric. No source-content hash fallback is used when identity is absent, because that could discard legitimately distinct records.
 
 Time slicing limits records returned per request, but it does not by itself reduce Elasticsearch
 shard fan-out from a broad index such as `aella-wineventlog-*`. For long ranges, use a date-scoped
@@ -131,6 +133,6 @@ P0 query/export usability and P1 user productivity are implemented and browser-v
 P2 operationalization, after one-shot export is stable:
 1. persistent job store and export history without plaintext credentials — implemented
 2. checkpoint/resume and retry-from-checkpoint for remote destinations — implemented at durable split-part boundaries; non-split retries from the beginning
-3. overlap/dedup strategy for resumed or scheduled exports
+3. overlap/dedup strategy for resumed or scheduled exports — implemented with half-open ranges, stable document-identity dedup, and explicit allow/reject overlap policy
 4. optional scheduled exports with encrypted credential persistence
 5. production hardening: reverse proxy, access boundary, rate limits, deployment/runbook

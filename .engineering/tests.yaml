@@ -49,4 +49,5 @@ scenarios:
       - "query time filters, record flattening, and adaptive slicing regressions pass"
       - "persistent export history survives process-memory loss without persisting credentials or raw queries"
       - "remote split-export checkpoints persist completed part hashes and resume skips only regenerated parts that exactly match saved checkpoints"
+      - "stable document identities are deduplicated without source-hash fallback, and reject-overlap blocks only intersecting matching export pipelines while allowing adjacent ranges"
     release_gate: true

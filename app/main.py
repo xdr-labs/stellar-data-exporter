@@ -111,9 +111,9 @@ def client_for(
     )
 
 
-def resume_fingerprint(payload: ExportInput) -> str:
+def destination_fingerprint_target(payload: ExportInput) -> dict[str, Any]:
     if isinstance(payload.destination, S3Destination):
-        destination_target: dict[str, Any] = {
+        return {
             "type": "s3",
             "endpoint_url": payload.destination.endpoint_url,
             "region": payload.destination.region,
@@ -121,8 +121,8 @@ def resume_fingerprint(payload: ExportInput) -> str:
             "prefix": payload.destination.prefix,
             "force_path_style": payload.destination.force_path_style,
         }
-    elif isinstance(payload.destination, SFTPDestination):
-        destination_target = {
+    if isinstance(payload.destination, SFTPDestination):
+        return {
             "type": "sftp",
             "host": payload.destination.host,
             "port": payload.destination.port,
@@ -130,9 +130,10 @@ def resume_fingerprint(payload: ExportInput) -> str:
             "remote_path": payload.destination.remote_path,
             "verify_host_key": payload.destination.verify_host_key,
         }
-    else:
-        destination_target = {"type": "download"}
+    return {"type": "download"}
 
+
+def resume_fingerprint(payload: ExportInput) -> str:
     identity = {
         "host": str(payload.host),
         "sources": [getattr(source, "value", str(source)) for source in payload.sources],
@@ -154,7 +155,35 @@ def resume_fingerprint(payload: ExportInput) -> str:
         "csv_include_header": payload.csv_include_header,
         "csv_bom": payload.csv_bom,
         "csv_flatten_nested": payload.csv_flatten_nested,
-        "destination": destination_target,
+        "destination": destination_fingerprint_target(payload),
+    }
+    canonical = json.dumps(
+        identity,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def overlap_fingerprint(payload: ExportInput) -> str:
+    identity = {
+        "host": str(payload.host),
+        "sources": [getattr(source, "value", str(source)) for source in payload.sources],
+        "time_field": payload.time_field,
+        "query_mode": payload.query_mode,
+        "query": payload.query,
+        "stellar_query": payload.stellar_query,
+        "format": payload.format,
+        "compress": payload.compress,
+        "max_file_size_bytes": payload.max_file_size_bytes,
+        "selected_fields": payload.selected_fields,
+        "record_limit": payload.record_limit,
+        "csv_delimiter": payload.csv_delimiter,
+        "csv_include_header": payload.csv_include_header,
+        "csv_bom": payload.csv_bom,
+        "csv_flatten_nested": payload.csv_flatten_nested,
+        "destination": destination_fingerprint_target(payload),
     }
     canonical = json.dumps(
         identity,
@@ -179,6 +208,8 @@ def sanitized_export_metadata(payload: ExportInput) -> dict[str, Any]:
         "record_limit": payload.record_limit,
         "selected_field_count": len(payload.selected_fields or []),
         "destination_type": payload.destination.type,
+        "overlap_policy": payload.overlap_policy,
+        "overlap_fingerprint": overlap_fingerprint(payload),
         "resume_fingerprint": resume_fingerprint(payload),
     }
 
@@ -761,6 +792,37 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
 @app.post("/api/export/jobs")
 async def create_export_job(payload: ExportInput) -> dict[str, str]:
     cleanup_jobs()
+    if payload.overlap_policy == "reject":
+        conflicts = JOB_STORE.find_overlaps(
+            overlap_fingerprint(payload),
+            payload.start,
+            payload.end,
+        )
+        if conflicts:
+            conflict = conflicts[0]
+            metadata = conflict.get("metadata") or {}
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "This export overlaps an existing matching export "
+                        f"({conflict['job_id'][:8]}, {conflict['status']}, "
+                        f"{metadata.get('start', '?')} → {metadata.get('end', '?')}). "
+                        "Use a non-overlapping range, choose Allow overlap, or Resume the "
+                        "existing remote job when applicable."
+                    ),
+                    "conflicts": [
+                        {
+                            "job_id": item["job_id"],
+                            "status": item["status"],
+                            "start": (item.get("metadata") or {}).get("start"),
+                            "end": (item.get("metadata") or {}).get("end"),
+                        }
+                        for item in conflicts
+                    ],
+                },
+            )
+
     job_id = uuid.uuid4().hex
     job = ExportJob(
         job_id=job_id,

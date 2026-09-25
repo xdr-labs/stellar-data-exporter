@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -149,6 +150,54 @@ class JobStore:
                 (bounded,),
             ).fetchall()
         return [self._decode(row) for row in rows if row is not None]
+
+    @staticmethod
+    def _timestamp(value: str) -> float:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.timestamp()
+
+    def find_overlaps(
+        self,
+        overlap_fingerprint: str,
+        start: datetime,
+        end: datetime,
+        *,
+        exclude_job_id: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        start_ts = start.timestamp()
+        end_ts = end.timestamp()
+        matches: list[dict[str, Any]] = []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM export_jobs ORDER BY created_at DESC"
+            ).fetchall()
+
+        for row in rows:
+            record = self._decode(row)
+            if record is None or record["job_id"] == exclude_job_id:
+                continue
+            metadata = record.get("metadata") or {}
+            if metadata.get("overlap_fingerprint") != overlap_fingerprint:
+                continue
+            if record["status"] == "expired":
+                continue
+            if record["status"] in {"failed", "cancelled", "interrupted"} and not record.get(
+                "completed_parts"
+            ):
+                continue
+            try:
+                existing_start = self._timestamp(metadata["start"])
+                existing_end = self._timestamp(metadata["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if existing_start < end_ts and existing_end > start_ts:
+                matches.append(record)
+                if len(matches) >= limit:
+                    break
+        return matches
 
     def recover_interrupted(self) -> int:
         now = time.time()

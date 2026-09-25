@@ -206,6 +206,7 @@ function resetAdvancedDefaults() {
   $("sftpVerifyHostKey").checked = true;
   $("targetRecords").value = "5000";
   $("minimumSlice").value = "1";
+  $("overlapPolicy").value = "allow";
   $("resolvedIndices").classList.add("hidden");
   $("toggleActualIndices").textContent = "Show actual indices";
   updateRecordLimitUI();
@@ -467,6 +468,8 @@ function renderInspector(plan, target) {
     maxBytes && outputBytes != null
       ? `~${Math.max(1, Math.ceil(outputBytes / maxBytes)).toLocaleString()}`
       : "1";
+  $("inspectorOverlapPolicy").textContent =
+    $("overlapPolicy").value === "reject" ? "Reject matching overlap" : "Allow overlap";
 }
 
 function renderEffectiveRequest() {
@@ -597,6 +600,7 @@ function exportPayload() {
     selected_fields: isAdvancedMode() && state.previewFields.length ? [...state.selectedFields] : null,
     record_limit: recordLimitValue(),
     format: selectedFormat(),
+    overlap_policy: $("overlapPolicy").value || "allow",
     compress: $("compress").checked,
     filename: $("filename").value.trim() || "stellar-export",
     max_file_size_bytes: splitSizeBytes(),
@@ -679,6 +683,7 @@ function exportProfileSnapshot() {
     destination: nonSecretDestinationProfile(),
     target_records_per_slice: Number($("targetRecords").value || 5000),
     minimum_slice_ms: Number($("minimumSlice").value || 1),
+    overlap_policy: $("overlapPolicy").value || "allow",
   };
 }
 
@@ -777,6 +782,7 @@ function applyProfileSettings(settings) {
 
   $("targetRecords").value = String(settings.target_records_per_slice || 5000);
   $("minimumSlice").value = String(settings.minimum_slice_ms || 1);
+  $("overlapPolicy").value = settings.overlap_policy || "allow";
 
   updateRecordLimitUI();
   updateSplitUI();
@@ -1534,6 +1540,7 @@ function initialize() {
   $("clearQueryHistory").addEventListener("click", clearQueryHistory);
   $("queryHistorySelect").addEventListener("change", () => renderQueryHistory($("queryHistorySelect").value));
   $("splitFiles").addEventListener("change", updateSplitUI);
+  $("overlapPolicy").addEventListener("change", renderEffectiveRequest);
   document.querySelectorAll('input[name="format"]').forEach((radio) => {
     radio.addEventListener("change", updateFormatOptions);
   });
