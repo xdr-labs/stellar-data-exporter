@@ -53,3 +53,24 @@ scenarios:
       - "scheduled export payloads remain encrypted at rest, use remote destinations only, persist across restart, and advance contiguous windows only after successful runs"
       - "production service binds Uvicorn to loopback only and deployment templates require TLS, authentication, API rate limiting, restrictive systemd sandboxing, and protected persistent state"
     release_gate: true
+  - id: RELEASE-ARTIFACT-001
+    cost: medium
+    estimated_seconds: 12
+    timeout_seconds: 120
+    agent_default: true
+    scope: packaging
+    name: Release artifact completeness
+    level: integration
+    domains:
+      - "core"
+    triggers:
+      - pr
+      - release
+    platforms:
+      - "linux"
+    command: "bash -lc 'set -euo pipefail; tmp=$(mktemp -d); trap \"rm -rf \\\"$tmp\\\"\" EXIT; mkdir -p \"$tmp/dist\"; uv build --out-dir \"$tmp/dist\" >\"$tmp/build.log\" 2>&1; cat \"$tmp/build.log\"; ! grep -q \"Package would be ignored\" \"$tmp/build.log\"; uv run python tools/verify_release_artifacts.py \"$tmp/dist\"'"
+    invariants:
+      - "source distribution contains operational deployment and Engineering System files"
+      - "wheel contains the Web UI static assets and canonical project metadata"
+      - "setuptools emits no ambiguous package-data warning"
+    release_gate: true
