@@ -57,6 +57,10 @@ function flatten(value, prefix = "", out = {}) {
   return out;
 }
 
+function isAdvancedMode() {
+  return document.body.classList.contains("mode-advanced");
+}
+
 function selectedQueryMode() {
   return document.querySelector('input[name="queryMode"]:checked')?.value || "elasticsearch_dsl";
 }
@@ -125,6 +129,40 @@ function updateRecordLimitUI() {
   $("recordLimit").disabled = !limited;
 }
 
+function resetAdvancedDefaults() {
+  $("verifyTls").checked = true;
+  $("timeField").value = "timestamp";
+  if (state.previewFields.length) {
+    state.selectedFields = [...state.previewFields];
+  }
+  document.querySelector('input[name="exportRecords"][value="all"]').checked = true;
+  $("recordLimit").value = "100000";
+  $("filename").value = "stellar-export";
+  $("compress").checked = false;
+  $("splitFiles").checked = false;
+  $("maxFileSizeValue").value = "250";
+  $("maxFileSizeUnit").value = "mb";
+  $("s3PathStyle").checked = false;
+  $("sftpVerifyHostKey").checked = true;
+  $("targetRecords").value = "5000";
+  $("minimumSlice").value = "1";
+  $("resolvedIndices").classList.add("hidden");
+  $("toggleActualIndices").textContent = "Show actual indices";
+  updateRecordLimitUI();
+  updateSplitUI();
+  renderFieldSelector();
+}
+
+function setUiMode(mode, reset = false) {
+  const advanced = mode === "advanced";
+  document.body.classList.toggle("mode-basic", !advanced);
+  document.body.classList.toggle("mode-advanced", advanced);
+  $("basicMode").classList.toggle("active", !advanced);
+  $("advancedMode").classList.toggle("active", advanced);
+  if (!advanced && reset) resetAdvancedDefaults();
+  updateSummary();
+}
+
 function outputFilename() {
   const format = document.querySelector('input[name="format"]:checked')?.value || "csv";
   const compressed = $("compress").checked;
@@ -179,7 +217,7 @@ function buildEffectiveQuery() {
   if (new Date(end) <= new Date(start)) throw new Error("End time must be later than start time.");
 
   const body = JSON.parse(JSON.stringify(raw));
-  if (state.previewFields.length && state.selectedFields.length) {
+  if (isAdvancedMode() && state.previewFields.length && state.selectedFields.length) {
     body._source = [...state.selectedFields];
   }
   delete body.aggs;
@@ -839,12 +877,12 @@ async function runExport() {
   try {
     setBusy(button, true, "Running export…");
     setStatus("runStatus", "Creating export job…");
-    if (state.previewFields.length && !state.selectedFields.length) {
+    if (isAdvancedMode() && state.previewFields.length && !state.selectedFields.length) {
       throw new Error("Select at least one export field.");
     }
     const payload = {
       ...basePayload(),
-      selected_fields: state.previewFields.length ? [...state.selectedFields] : null,
+      selected_fields: isAdvancedMode() && state.previewFields.length ? [...state.selectedFields] : null,
       record_limit: recordLimitValue(),
       format: document.querySelector('input[name="format"]:checked')?.value || "csv",
       compress: $("compress").checked,
@@ -920,6 +958,8 @@ function initialize() {
   $("startTime").value = localInputValue(yesterday);
   $("endTime").value = localInputValue(now);
 
+  $("basicMode").addEventListener("click", () => setUiMode("basic", true));
+  $("advancedMode").addEventListener("click", () => setUiMode("advanced"));
   $("testConnection").addEventListener("click", testConnection);
   $("testDestination").addEventListener("click", () => testRemoteDestination("destinationStatus", "testDestination"));
   $("testSftpDestination").addEventListener("click", () => testRemoteDestination("sftpDestinationStatus", "testSftpDestination"));
@@ -973,6 +1013,7 @@ function initialize() {
   updateSftpAuthUI();
   updateRecordLimitUI();
   updateQueryModeUI();
+  setUiMode("basic");
   updateSummary();
   loadDataSources();
 }

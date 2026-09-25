@@ -8,7 +8,7 @@
   <link rel="icon" href="/stellar-cyber-logo.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
+<body class="mode-basic">
   <header class="topbar">
     <div class="brand">
       <img class="stellar-logo" src="/stellar-cyber-logo.svg" alt="Stellar Cyber" />
@@ -19,6 +19,10 @@
       </div>
     </div>
     <div class="top-actions">
+      <div class="ui-mode-toggle" aria-label="Interface mode">
+        <button id="basicMode" class="ui-mode active" type="button">Basic</button>
+        <button id="advancedMode" class="ui-mode" type="button">Advanced</button>
+      </div>
       <span class="secure-badge"><span class="secure-dot"></span> Session-only credentials</span>
     </div>
   </header>
@@ -29,7 +33,7 @@
         <div>
           <p class="eyebrow">STELLAR CYBER · DATA EXPORT</p>
           <h1>Query once. Export safely at scale.</h1>
-          <p>Provide your Stellar host, root-scope All-Access Token, Elasticsearch DSL and time range. Large ranges are sliced automatically.</p>
+          <p>Choose data, time, query, output and destination. Safe defaults handle the rest; advanced tuning is available when needed.</p>
         </div>
         <div class="health" id="serviceHealth"><span class="dot"></span> service ready</div>
       </div>
@@ -49,7 +53,8 @@
         </label>
         <p class="hint">The exporter exchanges this credential for a short-lived JWT and refreshes it automatically during long exports.</p>
         <div class="row between">
-          <label class="check"><input id="verifyTls" type="checkbox" checked /> Verify TLS certificate</label>
+          <label class="check advanced-only"><input id="verifyTls" type="checkbox" checked /> Verify TLS certificate</label>
+          <span class="basic-only subtle-note">Secure TLS verification is enabled by default.</span>
           <button id="testConnection" class="button secondary">Test connection</button>
         </div>
         <div id="connectionStatus" class="status hidden"></div>
@@ -71,7 +76,7 @@
           <div class="muted">Loading data sources…</div>
         </div>
         <div class="grid two">
-          <label>Time field
+          <label class="advanced-only">Time field
             <input id="timeField" value="timestamp" spellcheck="false" />
           </label>
           <div class="selected-source-count">
@@ -79,7 +84,7 @@
             <strong id="selectedSourceCount">0 sources</strong>
           </div>
         </div>
-        <div class="resolved-indices">
+        <div class="resolved-indices advanced-only">
           <div class="resolved-index-header">
             <div>
               <span>Resolved indices</span>
@@ -120,7 +125,7 @@
           <textarea id="stellarQuery" class="stellar-query-area" spellcheck="false" placeholder='event_status:New AND srcip:"10.0.0.10"'></textarea>
           <p class="hint">Examples: <code>event_status:New</code> · <code>event_name:"Login Failure" AND srcip:10.0.0.*</code></p>
         </div>
-        <div class="actual-request query-inspector">
+        <div class="actual-request query-inspector advanced-only">
           <div class="actual-request-title">
             <div>
               <strong>Query Inspector</strong>
@@ -191,7 +196,7 @@
             <tbody><tr><td class="muted">No data loaded yet.</td></tr></tbody>
           </table>
         </div>
-        <div id="fieldSelector" class="field-selector hidden">
+        <div id="fieldSelector" class="field-selector advanced-only hidden">
           <div class="field-selector-head">
             <div>
               <h3>Export fields</h3>
@@ -210,12 +215,12 @@
       </section>
 
       <section class="card">
-        <div class="section-title"><span class="step">4</span><div><h2>Output</h2><p>CSV and JSON are streamed; large time ranges are adaptively sliced.</p></div></div>
+        <div class="section-title"><span class="step">4</span><div><h2>Output</h2><p>Choose CSV or JSON. Advanced mode adds field, limit, compression and file-splitting controls.</p></div></div>
         <div class="format-grid">
           <label class="choice selected"><input type="radio" name="format" value="csv" checked /><span><b>CSV</b><small>Nested objects flatten to dot notation.</small></span></label>
           <label class="choice"><input type="radio" name="format" value="json" /><span><b>JSON</b><small>Streams a valid JSON array.</small></span></label>
         </div>
-        <div class="record-limit-panel">
+        <div class="record-limit-panel advanced-only">
           <span class="record-limit-title">Export records</span>
           <label class="check"><input type="radio" name="exportRecords" value="all" checked /> All matching records</label>
           <label class="check record-limit-choice">
@@ -224,13 +229,13 @@
             <input id="recordLimit" class="record-limit-input" type="number" min="1" step="1" value="100000" disabled />
           </label>
         </div>
-        <div class="grid two">
+        <div class="grid two advanced-only">
           <label>Filename
             <input id="filename" value="stellar-export" />
           </label>
-          <label class="check large"><input id="compress" type="checkbox" checked /> gzip compression</label>
+          <label class="check large"><input id="compress" type="checkbox" /> gzip compression</label>
         </div>
-        <div class="split-settings">
+        <div class="split-settings advanced-only">
           <label class="check large">
             <input id="splitFiles" type="checkbox" />
             Split output by file size
@@ -247,11 +252,11 @@
             </label>
           </div>
         </div>
-        <div id="splitExample" class="split-example hidden">
+        <div id="splitExample" class="split-example advanced-only hidden">
           <span>Generated files</span>
           <code id="splitFilenameExample">stellar-export-0001.csv.gz · stellar-export-0002.csv.gz · …</code>
         </div>
-        <p class="hint">Parts are split on record boundaries, so a file may slightly exceed the target size. Browser downloads with multiple parts are bundled into one ZIP.</p>
+        <p class="hint advanced-only">Parts are split on record boundaries, so a file may slightly exceed the target size. Browser downloads with multiple parts are bundled into one ZIP.</p>
       </section>
 
       <section class="card">
@@ -284,7 +289,7 @@
             </label>
           </div>
           <div class="row between">
-            <label class="check"><input id="s3PathStyle" type="checkbox" /> Force path-style addressing</label>
+            <label class="check advanced-only"><input id="s3PathStyle" type="checkbox" /> Force path-style addressing</label>
             <button id="testDestination" class="button secondary">Test destination</button>
           </div>
           <div id="destinationStatus" class="status hidden"></div>
@@ -318,14 +323,14 @@
             <textarea id="sftpPrivateKey" class="secret-area" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
           </label>
           <div class="row between">
-            <label class="check"><input id="sftpVerifyHostKey" type="checkbox" checked /> Verify SSH host key</label>
+            <label class="check advanced-only"><input id="sftpVerifyHostKey" type="checkbox" checked /> Verify SSH host key</label>
             <button id="testSftpDestination" class="button secondary">Test destination</button>
           </div>
           <div id="sftpDestinationStatus" class="status hidden"></div>
         </div>
 
-        <details>
-          <summary>Advanced export settings</summary>
+        <details class="advanced-only" open>
+          <summary>Adaptive export settings</summary>
           <div class="grid two advanced">
             <label>Target records / slice
               <input id="targetRecords" type="number" min="100" max="50000" value="5000" />
@@ -366,8 +371,8 @@
       <div class="summary-row"><span>Data sources</span><strong id="summarySources">Alerts</strong></div>
       <div class="summary-row"><span>Range</span><strong id="summaryRange">—</strong></div>
       <div class="summary-row"><span>Matched</span><strong id="summaryRecords">Preview required</strong></div>
-      <div class="summary-row"><span>Output</span><strong id="summaryOutput">CSV · gzip</strong></div>
-      <div class="summary-row"><span>File split</span><strong id="summarySplit">Single file</strong></div>
+      <div class="summary-row"><span>Output</span><strong id="summaryOutput">CSV</strong></div>
+      <div class="summary-row advanced-only"><span>File split</span><strong id="summarySplit">Single file</strong></div>
       <div class="summary-row"><span>Destination</span><strong id="summaryDestination">Browser download</strong></div>
       <p class="summary-note">Review only · Run export is available after Destination settings.</p>
     </aside>
