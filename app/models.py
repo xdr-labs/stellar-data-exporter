@@ -8,13 +8,20 @@ from .sources import DataSourceId
 
 class ConnectionInput(BaseModel):
     host: HttpUrl
-    email: str = Field(min_length=3)
+    auth_mode: Literal["root_scope", "user_scope"] = "root_scope"
+    email: str | None = Field(default=None, min_length=3)
     token: str = Field(min_length=1)
     verify_tls: bool = True
     sources: list[DataSourceId] = Field(
         default_factory=lambda: [DataSourceId.ALERTS],
         min_length=1,
     )
+
+    @model_validator(mode="after")
+    def validate_auth(self):
+        if self.auth_mode == "root_scope" and not self.email:
+            raise ValueError("email is required for Root Scope authentication")
+        return self
 
 
 class IndexPlanInput(BaseModel):
@@ -33,7 +40,8 @@ class IndexPlanInput(BaseModel):
 
 class QueryInput(BaseModel):
     host: HttpUrl
-    email: str = Field(min_length=3)
+    auth_mode: Literal["root_scope", "user_scope"] = "root_scope"
+    email: str | None = Field(default=None, min_length=3)
     token: str = Field(min_length=1)
     verify_tls: bool = True
     sources: list[DataSourceId] = Field(min_length=1)
@@ -57,6 +65,10 @@ class QueryInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_query_input(self):
+        if self.auth_mode == "root_scope" and not self.email:
+            raise ValueError("email is required for Root Scope authentication")
+        if self.auth_mode == "user_scope" and self.query_mode != "stellar_lucene":
+            raise ValueError("User Scope API Key requires Stellar Cyber Query mode")
         if self.query_mode == "stellar_lucene" and not (self.stellar_query or "").strip():
             raise ValueError("stellar_query is required for Stellar Cyber Query mode")
         return self

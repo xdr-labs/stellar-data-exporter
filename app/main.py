@@ -157,6 +157,9 @@ def client_for(
         payload.token,
         payload.verify_tls,
         on_retry=on_retry,
+        auth_mode=payload.auth_mode,
+        query_mode=getattr(payload, "query_mode", "stellar_lucene" if payload.auth_mode == "user_scope" else "elasticsearch_dsl"),
+        stellar_query=getattr(payload, "stellar_query", None),
     )
 
 
@@ -185,6 +188,7 @@ def destination_fingerprint_target(payload: ExportInput) -> dict[str, Any]:
 def resume_fingerprint(payload: ExportInput) -> str:
     identity = {
         "host": str(payload.host),
+        "auth_mode": payload.auth_mode,
         "sources": [getattr(source, "value", str(source)) for source in payload.sources],
         "time_field": payload.time_field,
         "start": payload.start.isoformat(),
@@ -218,6 +222,7 @@ def resume_fingerprint(payload: ExportInput) -> str:
 def overlap_fingerprint(payload: ExportInput) -> str:
     identity = {
         "host": str(payload.host),
+        "auth_mode": payload.auth_mode,
         "sources": [getattr(source, "value", str(source)) for source in payload.sources],
         "time_field": payload.time_field,
         "query_mode": payload.query_mode,
@@ -246,6 +251,7 @@ def overlap_fingerprint(payload: ExportInput) -> str:
 def sanitized_export_metadata(payload: ExportInput) -> dict[str, Any]:
     return {
         "host": str(payload.host),
+        "auth_mode": payload.auth_mode,
         "sources": [getattr(source, "value", str(source)) for source in payload.sources],
         "start": payload.start.isoformat(),
         "end": payload.end.isoformat(),

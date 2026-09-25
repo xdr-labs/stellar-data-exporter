@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -32,11 +33,14 @@ class StellarClient:
     def __init__(
         self,
         host: str,
-        email: str,
+        email: str | None,
         token: str,
         verify_tls: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
         on_retry: Callable[[int], None] | None = None,
+        auth_mode: str = "root_scope",
+        query_mode: str = "elasticsearch_dsl",
+        stellar_query: str | None = None,
     ):
         self.host = host.rstrip("/")
         self.email = email
@@ -44,6 +48,9 @@ class StellarClient:
         self.verify_tls = verify_tls
         self.transport = transport
         self.on_retry = on_retry
+        self.auth_mode = auth_mode
+        self.query_mode = query_mode
+        self.stellar_query = (stellar_query or "").strip() or None
         self._jwt: str | None = None
         self._jwt_obtained_at = 0.0
         self._jwt_lock = asyncio.Lock()
@@ -61,23 +68,41 @@ class StellarClient:
 
             url = f"{self.host}/connect/api/v1/access_token"
             try:
-                response = await client.post(
-                    url,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                    auth=httpx.BasicAuth(self.email, self.token),
-                )
+                if self.auth_mode == "user_scope":
+                    response = await client.post(
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {self.token}",
+                            "Accept": "application/json",
+                        },
+                    )
+                else:
+                    if not self.email:
+                        raise StellarAuthError(
+                            "Root Scope authentication requires an account email."
+                        )
+                    response = await client.post(
+                        url,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        auth=httpx.BasicAuth(self.email, self.token),
+                    )
             except httpx.RequestError as exc:
                 raise StellarConnectionError(
                     "Cannot reach the Stellar Cyber host. Check the host address, DNS/network path, port, and TLS settings."
                 ) from exc
 
             if response.status_code == 401:
+                credential = (
+                    "User Scope API Key"
+                    if self.auth_mode == "user_scope"
+                    else "account email and Root Scope All-Access Token"
+                )
                 raise StellarAuthError(
-                    "Authentication failed. Check the account email and All-Access Token."
+                    f"Authentication failed. Check the {credential}."
                 )
             if response.status_code == 403:
                 raise StellarPermissionError(
-                    "Authentication was rejected by policy. Verify the account is a root-scope Super Admin with an All-Access Token."
+                    "Authentication was rejected by Stellar Cyber policy for this credential."
                 )
             if response.status_code >= 400:
                 raise StellarAPIError(
@@ -98,6 +123,60 @@ class StellarClient:
             self._jwt_obtained_at = time.monotonic()
             return access_token
 
+    @staticmethod
+    def _epoch_millis(value: Any) -> int:
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return int(parsed.timestamp() * 1000)
+        raise StellarAPIError("User Scope time range contains an unsupported value.")
+
+    def _user_scope_search_params(self, body: dict[str, Any]) -> dict[str, Any]:
+        if self.query_mode != "stellar_lucene" and self.stellar_query:
+            raise StellarAPIError(
+                "User Scope API Key requires Stellar Cyber Query (Lucene) mode."
+            )
+
+        params: dict[str, Any] = {
+            "size": int(body.get("size", 10)),
+            "track_total_hits": (
+                "true" if bool(body.get("track_total_hits", False)) else "false"
+            ),
+        }
+        expression = self.stellar_query or "*:*"
+
+        query = body.get("query")
+        if isinstance(query, dict):
+            bool_query = query.get("bool")
+            if isinstance(bool_query, dict):
+                filters = bool_query.get("filter") or []
+                if isinstance(filters, dict):
+                    filters = [filters]
+                for item in filters:
+                    if not isinstance(item, dict) or "range" not in item:
+                        continue
+                    ranges = item.get("range")
+                    if not isinstance(ranges, dict) or not ranges:
+                        continue
+                    field, bounds = next(iter(ranges.items()))
+                    if not isinstance(bounds, dict):
+                        continue
+                    lower_key = "gte" if "gte" in bounds else "gt" if "gt" in bounds else None
+                    upper_key = "lt" if "lt" in bounds else "lte" if "lte" in bounds else None
+                    if not lower_key or not upper_key:
+                        continue
+                    lower = self._epoch_millis(bounds[lower_key])
+                    upper = self._epoch_millis(bounds[upper_key])
+                    left = "[" if lower_key == "gte" else "{"
+                    right = "}" if upper_key == "lt" else "]"
+                    range_query = f"{field}:{left}{lower} TO {upper}{right}"
+                    expression = f"({expression}) AND {range_query}"
+                    break
+
+        params["q"] = expression
+        return params
+
     async def search(self, index: str, body: dict[str, Any]) -> dict[str, Any]:
         encoded_index = quote(index, safe="*,-._")
         url = f"{self.host}/connect/api/data/{encoded_index}/_search"
@@ -114,16 +193,25 @@ class StellarClient:
                         client,
                         force_refresh=attempt == 1,
                     )
-                    response = await client.request(
-                        "GET",
-                        url,
-                        headers={
-                            "Authorization": f"Bearer {jwt}",
-                            "Content-Type": "application/json",
-                            "Accept": "application/json",
-                        },
-                        json=body,
-                    )
+                    headers = {
+                        "Authorization": f"Bearer {jwt}",
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    }
+                    if self.auth_mode == "user_scope":
+                        response = await client.request(
+                            "GET",
+                            url,
+                            headers=headers,
+                            params=self._user_scope_search_params(body),
+                        )
+                    else:
+                        response = await client.request(
+                            "GET",
+                            url,
+                            headers={**headers, "Content-Type": "application/json"},
+                            json=body,
+                        )
                     if response.status_code != 401 or attempt == 1:
                         break
                     if self.on_retry:
@@ -135,11 +223,11 @@ class StellarClient:
 
         if response.status_code == 401:
             raise StellarAuthError(
-                "Stellar Cyber rejected the session token. Recheck the account email and All-Access Token."
+                "Stellar Cyber rejected the session token. Recheck the selected credential type and credential."
             )
         if response.status_code == 403:
             raise StellarPermissionError(
-                "Connected, but this account does not have permission to query raw data. Root-scope Super Admin access is required."
+                "Connected, but Stellar Cyber rejected raw-data access for this credential."
             )
         if response.status_code == 404:
             raise StellarAPIError(

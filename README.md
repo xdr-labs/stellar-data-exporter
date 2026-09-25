@@ -7,8 +7,8 @@ A lightweight web UI for exporting Stellar Cyber query results as CSV or JSON.
 The first working slice is intentionally small:
 
 - no application login or user database
-- Stellar Cyber host + account email + root-scope All-Access Token supplied per browser session
-- automatic exchange of the All-Access Token for a short-lived JWT
+- selectable Stellar Cyber credential type per browser session: Root Scope (account email + All-Access Token) or User Scope (API Key)
+- automatic exchange of either credential type for a short-lived JWT
 - automatic JWT refresh before expiry and one retry after HTTP 401
 - user-friendly multi-select data sources mapped internally to Stellar Cyber indices
 - user-supplied query conditions plus a live effective Elasticsearch request/DSL preview
@@ -40,10 +40,13 @@ The first working slice is intentionally small:
 
 ```text
 Browser
-  -> host / email / All-Access Token / index / DSL / time range
+  -> host / credential type / credential / index / query / time range
   -> FastAPI
-  -> POST /connect/api/v1/access_token using Basic(email:token)
+  -> Root Scope: POST /connect/api/v1/access_token using Basic(email:token)
+  -> User Scope: POST /connect/api/v1/access_token using Bearer API Key
   -> short-lived JWT
+  -> Root Scope raw search: Elasticsearch DSL request body
+  -> User Scope raw search: Stellar Cyber/Lucene q= query parameters
   -> GET /connect/api/data/{index}/_search using Bearer JWT
   -> adaptive non-overlapping time slices
   -> CSV / JSON Array / NDJSON stream
@@ -79,13 +82,18 @@ Scheduled exports use `export-schedules.sqlite3` plus `schedule.key` in the same
 
 ## Stellar Cyber API authentication
 
-Raw Elasticsearch index queries are intended for Super Admin users with root scope and an
-All-Access Token. Scoped API keys are not supported by the raw `/connect/api/data` endpoint.
+The exporter supports two credential flows for raw-data query and export:
 
-The adapter exchanges the account email and All-Access Token at
-`/connect/api/v1/access_token`, caches the returned JWT for less than its documented
-10-minute lifetime, and refreshes automatically during long-running exports. A 401 from
-the data API forces one immediate JWT refresh and retry.
+- **Root Scope** — account email + All-Access Token. The adapter exchanges the pair at
+  `/connect/api/v1/access_token` using HTTP Basic authentication, then uses the returned JWT
+  for Elasticsearch DSL requests.
+- **User Scope** — User API Key. The adapter sends the API Key as a Bearer credential to
+  `/connect/api/v1/access_token`, then uses the returned JWT with Stellar Cyber/Lucene `q=`
+  search parameters. The UI selects Stellar Cyber Query mode automatically for this flow.
+
+Both flows cache the returned JWT for less than its documented 10-minute lifetime and refresh
+automatically during long-running exports. A 401 from the data API forces one immediate JWT
+refresh and retry.
 
 ## Install and run
 

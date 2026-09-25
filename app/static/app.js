@@ -117,6 +117,10 @@ function isAdvancedMode() {
   return document.body.classList.contains("mode-advanced");
 }
 
+function selectedAuthMode() {
+  return document.querySelector('input[name="authMode"]:checked')?.value || "root_scope";
+}
+
 function selectedQueryMode() {
   return document.querySelector('input[name="queryMode"]:checked')?.value || "elasticsearch_dsl";
 }
@@ -525,17 +529,23 @@ async function copyInspectorText(value, label) {
 function basePayload() {
   const start = isoFromLocal($("startTime").value);
   const end = isoFromLocal($("endTime").value);
+  const authMode = selectedAuthMode();
   if (!start || !end) throw new Error("Start and end time are required.");
   if (new Date(end) <= new Date(start)) throw new Error("End time must be later than start time.");
   if (!$("host").value.trim()) throw new Error("Stellar Cyber host is required.");
-  if (!$("email").value.trim()) throw new Error("Stellar Cyber account email is required.");
-  if (!$("token").value.trim()) throw new Error("All-Access Token is required.");
+  if (authMode === "root_scope" && !$("email").value.trim()) {
+    throw new Error("Account email is required for Root Scope.");
+  }
+  if (!$("token").value.trim()) {
+    throw new Error(authMode === "user_scope" ? "User API Key is required." : "All-Access Token is required.");
+  }
   const sources = selectedSources();
   if (!sources.length) throw new Error("Select at least one data source.");
 
   return {
     host: $("host").value.trim(),
-    email: $("email").value.trim(),
+    auth_mode: authMode,
+    email: authMode === "root_scope" ? $("email").value.trim() : null,
     token: $("token").value.trim(),
     verify_tls: $("verifyTls").checked,
     sources,
@@ -659,6 +669,7 @@ function exportProfileSnapshot() {
   return {
     version: 1,
     host: $("host").value.trim(),
+    auth_mode: selectedAuthMode(),
     verify_tls: $("verifyTls").checked,
     sources: selectedSources(),
     time_field: $("timeField").value.trim() || "timestamp",
@@ -725,6 +736,7 @@ function saveProfile() {
 function applyProfileSettings(settings) {
   if (!settings) return;
   $("host").value = settings.host || "";
+  setRadioValue("authMode", settings.auth_mode || "root_scope");
   $("verifyTls").checked = settings.verify_tls !== false;
   $("timeField").value = settings.time_field || "timestamp";
   applySourceSelection(settings.sources || ["alerts"]);
@@ -787,6 +799,7 @@ function applyProfileSettings(settings) {
   updateRecordLimitUI();
   updateSplitUI();
   updateFormatOptions();
+  updateAuthModeUI();
   updateQueryModeUI();
   updateSftpAuthUI();
   updateDestinationUI();
@@ -938,7 +951,7 @@ function apiErrorMessage(body, status) {
     if (typeof message === "string") return message;
   }
 
-  if (status === 401) return "Authentication failed. Check the account email and All-Access Token.";
+  if (status === 401) return "Authentication failed. Check the selected credential type and credential.";
   if (status === 403) return "Connected, but the account does not have permission to query the selected data sources.";
   if (status >= 500) return "Connection failed. Check the host address, network path, and TLS settings.";
   return `Request failed (HTTP ${status}).`;
@@ -1127,8 +1140,14 @@ function updateSummary() {
 async function testConnection() {
   const button = $("testConnection");
   try {
-    if (!$("host").value.trim() || !$("email").value.trim() || !$("token").value.trim()) {
-      throw new Error("Host, account email, and All-Access Token are required.");
+    const authMode = selectedAuthMode();
+    if (!$("host").value.trim() || !$("token").value.trim()) {
+      throw new Error(authMode === "user_scope"
+        ? "Host and User API Key are required."
+        : "Host, account email, and All-Access Token are required.");
+    }
+    if (authMode === "root_scope" && !$("email").value.trim()) {
+      throw new Error("Account email is required for Root Scope.");
     }
     const sources = selectedSources();
     if (!sources.length) throw new Error("Select at least one data source.");
@@ -1138,7 +1157,8 @@ async function testConnection() {
       method: "POST",
       body: JSON.stringify({
         host: $("host").value.trim(),
-        email: $("email").value.trim(),
+        auth_mode: authMode,
+        email: authMode === "root_scope" ? $("email").value.trim() : null,
         token: $("token").value.trim(),
         verify_tls: $("verifyTls").checked,
         sources,
@@ -1183,14 +1203,41 @@ function validateQuery() {
   }
 }
 
+function updateAuthModeUI() {
+  const userScope = selectedAuthMode() === "user_scope";
+  $("emailLabel").classList.toggle("hidden", userScope);
+  $("tokenLabel").textContent = userScope ? "User API Key" : "All-Access Token";
+  $("token").placeholder = userScope
+    ? "Enter User Scope API Key"
+    : "Enter Root Scope All-Access Token";
+  $("authHint").textContent = userScope
+    ? "User Scope uses the API Key directly to obtain a short-lived JWT. Raw-data query and export use Stellar Cyber Query (Lucene)."
+    : "Root Scope uses account email + All-Access Token. JWT refresh is automatic during long exports.";
+
+  document.querySelectorAll('input[name="authMode"]').forEach((radio) => {
+    radio.closest(".query-mode")?.classList.toggle("selected", radio.checked);
+  });
+
+  const dsl = document.querySelector('input[name="queryMode"][value="elasticsearch_dsl"]');
+  const lucene = document.querySelector('input[name="queryMode"][value="stellar_lucene"]');
+  if (dsl) {
+    dsl.disabled = userScope;
+    dsl.closest(".query-mode")?.classList.toggle("disabled-control", userScope);
+  }
+  if (userScope && lucene) {
+    lucene.checked = true;
+    if (!$("stellarQuery").value.trim()) $("stellarQuery").value = "*:*";
+  }
+  updateQueryModeUI();
+}
+
 function updateQueryModeUI() {
   const stellar = selectedQueryMode() === "stellar_lucene";
   $("elasticQueryPanel").classList.toggle("hidden", stellar);
   $("stellarQueryPanel").classList.toggle("hidden", !stellar);
   $("validateQuery").textContent = stellar ? "Validate Query" : "Validate JSON";
-  document.querySelectorAll(".query-mode").forEach((label) => {
-    const radio = label.querySelector('input[name="queryMode"]');
-    label.classList.toggle("selected", !!radio?.checked);
+  document.querySelectorAll('input[name="queryMode"]').forEach((radio) => {
+    radio.closest(".query-mode")?.classList.toggle("selected", radio.checked);
   });
   updateSummary();
 }
@@ -1727,6 +1774,9 @@ function initialize() {
     renderEffectiveRequest();
   });
   $("sftpAuthMethod").addEventListener("change", updateSftpAuthUI);
+  document.querySelectorAll('input[name="authMode"]').forEach((radio) => {
+    radio.addEventListener("change", updateAuthModeUI);
+  });
   document.querySelectorAll('input[name="queryMode"]').forEach((radio) => {
     radio.addEventListener("change", updateQueryModeUI);
   });
