@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import tempfile
@@ -338,7 +339,10 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
 
     total, exact = total_hits(response)
     rows = [hit_source(hit) for hit in response.get("hits", {}).get("hits", [])]
-    sample_bytes = sum(len(str(row).encode("utf-8")) for row in rows)
+    sample_bytes = sum(
+        len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        for row in rows
+    )
     estimated_bytes = int((sample_bytes / max(len(rows), 1)) * total) if rows else 0
     warnings = list(index_plan_result.warnings)
     if (payload.end - payload.start).total_seconds() > 86400:
@@ -352,6 +356,7 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
         "total": total,
         "total_exact": exact,
         "took_ms": response.get("took"),
+        "preview_bytes": sample_bytes,
         "estimated_bytes": estimated_bytes,
         "rows": rows,
         "fields": discover_fields(rows),

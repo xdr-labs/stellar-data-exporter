@@ -85,3 +85,11 @@ details{border-top:1px solid #e5e1e2;padding-top:13px}summary{cursor:pointer;fon
 .record-limit-panel{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin:-2px 0 16px;padding:11px 12px;border:1px solid #e6e1e3;border-radius:9px;background:#faf9f9}
 .record-limit-title{font-size:11px;font-weight:850;color:#4d474b;text-transform:uppercase;letter-spacing:.04em}.record-limit-choice{gap:7px}.record-limit-input{width:120px;padding:7px 9px}.record-limit-input:disabled{background:#f0edef;color:#8a8588}
 @media(max-width:650px){.record-limit-panel{align-items:flex-start;flex-direction:column;gap:9px}.record-limit-choice{width:100%}.record-limit-input{flex:1}}
+
+.query-inspector{padding:16px}.inspector-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:-2px 0 12px}.copy-status{font-size:10px;color:var(--green);font-weight:750}
+.inspector-section{border-top:1px solid #e7e2e4;padding-top:11px;margin-top:11px}.inspector-section h4{margin:0 0 8px;font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:#746d71}
+.inspector-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.inspector-grid>div{min-width:0;border:1px solid #e8e3e5;border-radius:7px;background:#fff;padding:8px 9px}.inspector-grid span{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:3px}.inspector-grid strong,.inspector-grid code{display:block;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.inspector-grid code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.inspector-grid.stats,.inspector-grid.plan{grid-template-columns:repeat(4,minmax(0,1fr))}.inspector-grid.plan>div{grid-column:span 1}.inspector-grid.plan>div:first-child{grid-column:span 2}
+.query-inspector .effective-area{min-height:210px;margin-top:0}
+@media(max-width:900px){.inspector-grid.stats,.inspector-grid.plan{grid-template-columns:repeat(2,minmax(0,1fr))}.inspector-grid.plan>div:first-child{grid-column:span 2}}
+@media(max-width:650px){.inspector-grid,.inspector-grid.stats,.inspector-grid.plan{grid-template-columns:1fr}.inspector-grid.plan>div:first-child{grid-column:auto}.inspector-actions .button{flex:1}}

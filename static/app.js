@@ -2,6 +2,8 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   previewTotal: null,
+  previewLatencyMs: null,
+  previewBytes: null,
   estimatedBytes: null,
   sourceCatalog: [],
   indexPlan: null,
@@ -23,7 +25,8 @@ function localInputValue(date) {
 }
 
 function humanBytes(bytes) {
-  if (!bytes) return "—";
+  if (bytes == null || !Number.isFinite(Number(bytes))) return "—";
+  if (Number(bytes) === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = bytes;
   let unit = 0;
@@ -286,6 +289,86 @@ async function refreshIndexPlan() {
   renderEffectiveRequest();
 }
 
+function effectiveExportRecordCount() {
+  if (state.previewTotal == null) return null;
+  const total = Number(state.previewTotal);
+  try {
+    const limit = recordLimitValue();
+    return limit == null ? total : Math.min(total, limit);
+  } catch {
+    return total;
+  }
+}
+
+function estimatedOutputBytes() {
+  const records = effectiveExportRecordCount();
+  if (records == null || state.estimatedBytes == null || state.previewTotal == null) return null;
+  const total = Number(state.previewTotal);
+  if (total <= 0) return 0;
+  return Math.round(Number(state.estimatedBytes) * (records / total));
+}
+
+function renderInspector(plan, target) {
+  const requestPath = $("requestPath").textContent;
+  const host = $("host").value.trim().replace(/\/$/, "");
+  $("finalEndpoint").textContent = host ? `${host}${requestPath}` : requestPath;
+  $("inspectorResolvedIndices").textContent = target || "Planning…";
+  $("inspectorMatchedRecords").textContent =
+    state.previewTotal == null ? "Preview required" : Number(state.previewTotal).toLocaleString();
+  $("inspectorPreviewLatency").textContent =
+    state.previewLatencyMs == null ? "—" : `${state.previewLatencyMs} ms`;
+  $("inspectorPreviewBytes").textContent = humanBytes(state.previewBytes);
+  $("inspectorEstimatedOutputSize").textContent = humanBytes(estimatedOutputBytes());
+
+  const selected = state.previewFields.length
+    ? state.selectedFields
+    : [];
+  const selectedText = state.previewFields.length
+    ? (selected.length ? `${selected.length}: ${selected.join(", ")}` : "None")
+    : "All source fields";
+  $("inspectorSelectedFields").textContent = selectedText;
+  $("inspectorSelectedFields").title = selectedText;
+
+  let limitText = "All matching records";
+  try {
+    const limit = recordLimitValue();
+    if (limit != null) limitText = `First ${limit.toLocaleString()} records`;
+  } catch {
+    limitText = "Invalid limit";
+  }
+  $("inspectorExportLimit").textContent = limitText;
+
+  const targetRecords = Number($("targetRecords").value || 5000);
+  $("inspectorAdaptiveSlicing").textContent = "Enabled · time-range bisect";
+  $("inspectorTargetRecords").textContent = Number.isFinite(targetRecords)
+    ? targetRecords.toLocaleString()
+    : "—";
+
+  const exportRecords = effectiveExportRecordCount();
+  $("inspectorEstimatedSlices").textContent =
+    exportRecords == null || !Number.isFinite(targetRecords) || targetRecords < 1
+      ? "Preview required"
+      : `~${Math.max(1, Math.ceil(exportRecords / targetRecords)).toLocaleString()}`;
+
+  let maxBytes = null;
+  if ($("splitFiles").checked) {
+    try {
+      maxBytes = splitSizeBytes();
+      $("inspectorMaxFileSize").textContent = humanBytes(maxBytes);
+    } catch {
+      $("inspectorMaxFileSize").textContent = "Invalid";
+    }
+  } else {
+    $("inspectorMaxFileSize").textContent = "No split";
+  }
+
+  const outputBytes = estimatedOutputBytes();
+  $("inspectorEstimatedFiles").textContent =
+    maxBytes && outputBytes != null
+      ? `~${Math.max(1, Math.ceil(outputBytes / maxBytes)).toLocaleString()}`
+      : "1";
+}
+
 function renderEffectiveRequest() {
   const plan = renderIndexPlan();
   const target = plan?.target;
@@ -296,6 +379,44 @@ function renderEffectiveRequest() {
   } catch (error) {
     $("effectiveDsl").value = `Effective DSL unavailable: ${error.message}`;
   }
+  renderInspector(plan, target);
+}
+
+function shellQuote(value) {
+  return "'" + String(value).split("'").join("'\"'\"'") + "'";
+}
+
+function buildRedactedCurl() {
+  const host = $("host").value.trim().replace(/\/$/, "") || "<STELLAR-HOST>";
+  const endpoint = `${host}${$("requestPath").textContent}`;
+  let body = $("effectiveDsl").value.trim();
+  if (!body.startsWith("{")) body = "{}";
+  const insecure = $("verifyTls").checked ? "" : " -k";
+  return [
+    `curl${insecure} -X GET ${shellQuote(endpoint)}`,
+    `  -H ${shellQuote("Authorization: Bearer <REDACTED>")}`,
+    `  -H ${shellQuote("Content-Type: application/json")}`,
+    `  --data-raw ${shellQuote(body)}`,
+  ].join(" \\\n");
+}
+
+async function copyInspectorText(value, label) {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = value;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  $("copyStatus").textContent = `${label} copied`;
+  setTimeout(() => {
+    if ($("copyStatus").textContent === `${label} copied`) $("copyStatus").textContent = "";
+  }, 1800);
 }
 
 function basePayload() {
@@ -665,6 +786,8 @@ async function previewQuery() {
       body: JSON.stringify(basePayload()),
     });
     state.previewTotal = result.total;
+    state.previewLatencyMs = result.took_ms;
+    state.previewBytes = result.preview_bytes;
     state.estimatedBytes = result.estimated_bytes;
     if (result.index_plan) {
       state.indexPlan = result.index_plan;
@@ -802,6 +925,9 @@ function initialize() {
   $("testSftpDestination").addEventListener("click", () => testRemoteDestination("sftpDestinationStatus", "testSftpDestination"));
   $("validateQuery").addEventListener("click", validateQuery);
   $("previewQuery").addEventListener("click", previewQuery);
+  $("copyDsl").addEventListener("click", () => copyInspectorText($("effectiveDsl").value, "DSL"));
+  $("copyRequestPath").addEventListener("click", () => copyInspectorText($("requestPath").textContent, "Request path"));
+  $("copyCurl").addEventListener("click", () => copyInspectorText(buildRedactedCurl(), "cURL"));
   $("runExport").addEventListener("click", runExport);
   $("splitFiles").addEventListener("change", updateSplitUI);
   document.querySelectorAll('input[name="exportRecords"]').forEach((radio) => {

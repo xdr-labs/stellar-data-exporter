@@ -52,6 +52,8 @@ def test_preview_and_json_download(monkeypatch):
     assert preview.status_code == 200
     assert preview.json()["total"] == 2
     assert len(preview.json()["rows"]) == 2
+    assert preview.json()["preview_bytes"] > 0
+    assert preview.json()["estimated_bytes"] >= preview.json()["preview_bytes"]
     assert preview.json()["fields"] == ["timestamp", "severity", "srcip"]
 
     request = {

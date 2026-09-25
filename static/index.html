@@ -120,19 +120,54 @@
           <textarea id="stellarQuery" class="stellar-query-area" spellcheck="false" placeholder='event_status:New AND srcip:"10.0.0.10"'></textarea>
           <p class="hint">Examples: <code>event_status:New</code> · <code>event_name:"Login Failure" AND srcip:10.0.0.*</code></p>
         </div>
-        <div class="actual-request">
+        <div class="actual-request query-inspector">
           <div class="actual-request-title">
             <div>
-              <strong>Actual request sent to Stellar Cyber</strong>
-              <small>Resolved indices and managed time filter</small>
+              <strong>Query Inspector</strong>
+              <small>Final request, query statistics, and export plan</small>
             </div>
             <span class="managed-badge system">Read only</span>
           </div>
-          <div class="request-target">
-            <span>GET</span>
-            <code id="requestPath">/connect/api/data/{select-data-source}/_search</code>
+          <div class="inspector-actions">
+            <button id="copyDsl" class="button secondary small" type="button">Copy DSL</button>
+            <button id="copyRequestPath" class="button secondary small" type="button">Copy request path</button>
+            <button id="copyCurl" class="button secondary small" type="button">Copy cURL</button>
+            <span id="copyStatus" class="copy-status"></span>
           </div>
-          <textarea id="effectiveDsl" class="effective-area" spellcheck="false" readonly></textarea>
+          <div class="inspector-section">
+            <h4>Request</h4>
+            <div class="inspector-grid">
+              <div><span>Method</span><strong id="requestMethod">GET</strong></div>
+              <div><span>Final endpoint</span><code id="finalEndpoint">—</code></div>
+              <div><span>Request path</span><code id="requestPath">/connect/api/data/{select-data-source}/_search</code></div>
+              <div><span>Resolved indices</span><code id="inspectorResolvedIndices">—</code></div>
+            </div>
+          </div>
+          <div class="inspector-section">
+            <h4>Query</h4>
+            <textarea id="effectiveDsl" class="effective-area" spellcheck="false" readonly></textarea>
+          </div>
+          <div class="inspector-section">
+            <h4>Statistics</h4>
+            <div class="inspector-grid stats">
+              <div><span>Matched records</span><strong id="inspectorMatchedRecords">Preview required</strong></div>
+              <div><span>Preview latency</span><strong id="inspectorPreviewLatency">—</strong></div>
+              <div><span>Preview bytes</span><strong id="inspectorPreviewBytes">—</strong></div>
+              <div><span>Estimated output size</span><strong id="inspectorEstimatedOutputSize">—</strong></div>
+            </div>
+          </div>
+          <div class="inspector-section">
+            <h4>Export Plan</h4>
+            <div class="inspector-grid plan">
+              <div><span>Selected fields</span><strong id="inspectorSelectedFields">All source fields</strong></div>
+              <div><span>Export limit</span><strong id="inspectorExportLimit">All matching records</strong></div>
+              <div><span>Adaptive slicing</span><strong id="inspectorAdaptiveSlicing">Enabled</strong></div>
+              <div><span>Target records/query</span><strong id="inspectorTargetRecords">5,000</strong></div>
+              <div><span>Estimated slices</span><strong id="inspectorEstimatedSlices">Preview required</strong></div>
+              <div><span>Max file size</span><strong id="inspectorMaxFileSize">No split</strong></div>
+              <div><span>Estimated output files</span><strong id="inspectorEstimatedFiles">1</strong></div>
+            </div>
+          </div>
         </div>
         <div class="row between wrap">
           <div id="queryStatus" class="status compact">Ready to validate.</div>
