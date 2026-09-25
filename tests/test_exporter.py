@@ -1,6 +1,6 @@
 import json
 
-from app.exporter import flatten_record
+from app.exporter import discover_fields, flatten_record, project_record
 
 
 def test_flatten_record_flattens_nested_dict_and_serializes_arrays():
@@ -15,6 +15,36 @@ def test_flatten_record_flattens_nested_dict_and_serializes_arrays():
     assert flat["geo.country"] == "KR"
     assert flat["geo.city"] == "Seoul"
     assert json.loads(flat["tags"]) == ["one", "two"]
+
+
+def test_discover_fields_preserves_first_seen_flattened_order():
+    records = [
+        {"timestamp": "t1", "metadata": {"user": "alice", "geo": {"country": "KR"}}},
+        {"timestamp": "t2", "srcip": "10.0.0.1", "metadata": {"user": "bob"}},
+    ]
+    assert discover_fields(records) == [
+        "timestamp",
+        "metadata.user",
+        "metadata.geo.country",
+        "srcip",
+    ]
+
+
+def test_project_record_keeps_only_selected_nested_fields_in_selected_order():
+    record = {
+        "timestamp": "t1",
+        "srcip": "10.0.0.1",
+        "metadata": {"user": "alice", "geo": {"country": "KR", "city": "Seoul"}},
+    }
+    projected = project_record(
+        record,
+        ["metadata.geo.country", "srcip", "metadata.user"],
+    )
+    assert list(projected) == ["metadata", "srcip"]
+    assert projected == {
+        "metadata": {"geo": {"country": "KR"}, "user": "alice"},
+        "srcip": "10.0.0.1",
+    }
 
 
 import gzip

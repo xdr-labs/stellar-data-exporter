@@ -114,4 +114,15 @@ class ExportInput(QueryInput):
     compress: bool = False
     filename: str | None = None
     max_file_size_bytes: int | None = Field(default=None, ge=256)
+    selected_fields: list[str] | None = Field(default=None, min_length=1)
     destination: Destination = Field(default_factory=DownloadDestination)
+
+    @field_validator("selected_fields")
+    @classmethod
+    def normalize_selected_fields(cls, fields: list[str] | None):
+        if fields is None:
+            return None
+        normalized = list(dict.fromkeys(field.strip() for field in fields if field.strip()))
+        if not normalized:
+            raise ValueError("selected_fields must contain at least one field")
+        return normalized

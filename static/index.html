@@ -156,6 +156,22 @@
             <tbody><tr><td class="muted">No data loaded yet.</td></tr></tbody>
           </table>
         </div>
+        <div id="fieldSelector" class="field-selector hidden">
+          <div class="field-selector-head">
+            <div>
+              <h3>Export fields</h3>
+              <p class="hint">Choose fields discovered in Preview. Selected order becomes the CSV column order.</p>
+            </div>
+            <strong id="selectedFieldCount">0 selected</strong>
+          </div>
+          <div class="field-toolbar">
+            <input id="fieldSearch" type="search" placeholder="Search fields…" />
+            <button id="selectAllFields" class="button secondary small" type="button">Select all</button>
+            <button id="clearFields" class="button secondary small" type="button">Clear</button>
+          </div>
+          <div id="fieldList" class="field-list"></div>
+          <p class="hint">Nested fields use dot notation. Use ↑/↓ to change export order.</p>
+        </div>
       </section>
 
       <section class="card">

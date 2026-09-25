@@ -52,6 +52,7 @@ def test_preview_and_json_download(monkeypatch):
     assert preview.status_code == 200
     assert preview.json()["total"] == 2
     assert len(preview.json()["rows"]) == 2
+    assert preview.json()["fields"] == ["timestamp", "severity", "srcip"]
 
     request = {
         **payload(),
@@ -139,3 +140,108 @@ def test_stellar_lucene_preview_compiles_query_and_keeps_managed_time_filter(mon
         }
     }
     assert captured["body"]["query"]["bool"]["filter"][0]["range"]["timestamp"]
+
+
+def test_selected_fields_filter_stellar_source_and_csv_column_order(monkeypatch):
+    captured_bodies = []
+
+    async def selected_search(self, index, body):
+        captured_bodies.append(body)
+        size = body.get("size", 0)
+        if size == 0:
+            return {
+                "took": 1,
+                "hits": {"total": {"value": 2, "relation": "eq"}, "hits": []},
+            }
+        hits = [
+            {
+                "_source": {
+                    "timestamp": "2026-09-25T00:00:00+00:00",
+                    "severity": 80,
+                    "srcip": "10.0.0.1",
+                    "metadata": {"user": "alice"},
+                }
+            },
+            {
+                "_source": {
+                    "timestamp": "2026-09-25T00:00:01+00:00",
+                    "severity": 90,
+                    "srcip": "10.0.0.2",
+                    "metadata": {"user": "bob"},
+                }
+            },
+        ]
+        return {
+            "took": 2,
+            "hits": {
+                "total": {"value": 2, "relation": "eq"},
+                "hits": hits[:size],
+            },
+        }
+
+    monkeypatch.setattr(StellarClient, "search", selected_search)
+    client = TestClient(app)
+    request = {
+        **payload(),
+        "format": "csv",
+        "compress": False,
+        "filename": "selected",
+        "selected_fields": ["srcip", "metadata.user", "timestamp"],
+    }
+
+    job = client.post("/api/export/jobs", json=request)
+    assert job.status_code == 200
+    download = client.get(job.json()["download_url"])
+    assert download.status_code == 200
+    lines = download.text.strip().splitlines()
+    assert lines[0] == "srcip,metadata.user,timestamp"
+    assert lines[1].startswith("10.0.0.1,alice,")
+    assert captured_bodies
+    assert all(
+        body["_source"] == ["srcip", "metadata.user", "timestamp"]
+        for body in captured_bodies
+    )
+
+
+def test_selected_fields_json_preserves_nested_shape(monkeypatch):
+    async def nested_search(self, index, body):
+        size = body.get("size", 0)
+        if size == 0:
+            return {
+                "took": 1,
+                "hits": {"total": {"value": 1, "relation": "eq"}, "hits": []},
+            }
+        return {
+            "took": 2,
+            "hits": {
+                "total": {"value": 1, "relation": "eq"},
+                "hits": [{
+                    "_source": {
+                        "timestamp": "2026-09-25T00:00:00+00:00",
+                        "srcip": "10.0.0.1",
+                        "metadata": {
+                            "user": "alice",
+                            "geo": {"country": "KR", "city": "Seoul"},
+                        },
+                    }
+                }],
+            },
+        }
+
+    monkeypatch.setattr(StellarClient, "search", nested_search)
+    client = TestClient(app)
+    request = {
+        **payload(),
+        "format": "json",
+        "compress": False,
+        "filename": "selected-json",
+        "selected_fields": ["metadata.geo.country", "srcip"],
+    }
+
+    job = client.post("/api/export/jobs", json=request)
+    assert job.status_code == 200
+    download = client.get(job.json()["download_url"])
+    assert download.status_code == 200
+    assert download.json() == [
+        {"metadata": {"geo": {"country": "KR"}}, "srcip": "10.0.0.1"}
+    ]

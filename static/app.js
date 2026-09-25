@@ -7,6 +7,8 @@ const state = {
   indexPlan: null,
   indexPlanKey: null,
   indexPlanRequest: 0,
+  previewFields: [],
+  selectedFields: [],
 };
 
 function isoFromLocal(value) {
@@ -159,6 +161,9 @@ function buildEffectiveQuery() {
   if (new Date(end) <= new Date(start)) throw new Error("End time must be later than start time.");
 
   const body = JSON.parse(JSON.stringify(raw));
+  if (state.previewFields.length && state.selectedFields.length) {
+    body._source = [...state.selectedFields];
+  }
   delete body.aggs;
   delete body.aggregations;
   delete body.collapse;
@@ -433,6 +438,88 @@ function renderPreview(rows) {
   table.innerHTML = thead + tbody;
 }
 
+function updateDiscoveredFields(fields) {
+  const previousKnown = new Set(state.previewFields);
+  const available = [...new Set((fields || []).filter(Boolean))];
+
+  if (!state.previewFields.length) {
+    state.selectedFields = [...available];
+  } else {
+    const availableSet = new Set(available);
+    const preserved = state.selectedFields.filter((field) => availableSet.has(field));
+    const newlyDiscovered = available.filter((field) => !previousKnown.has(field));
+    state.selectedFields = [...preserved, ...newlyDiscovered];
+  }
+  state.previewFields = available;
+  renderFieldSelector();
+}
+
+function moveSelectedField(field, direction) {
+  const index = state.selectedFields.indexOf(field);
+  const next = index + direction;
+  if (index < 0 || next < 0 || next >= state.selectedFields.length) return;
+  [state.selectedFields[index], state.selectedFields[next]] = [
+    state.selectedFields[next],
+    state.selectedFields[index],
+  ];
+  renderFieldSelector();
+  renderEffectiveRequest();
+}
+
+function renderFieldSelector() {
+  const container = $("fieldSelector");
+  const list = $("fieldList");
+  if (!state.previewFields.length) {
+    container.classList.add("hidden");
+    list.innerHTML = "";
+    $("selectedFieldCount").textContent = "0 selected";
+    return;
+  }
+
+  container.classList.remove("hidden");
+  const search = $("fieldSearch").value.trim().toLowerCase();
+  const selectedSet = new Set(state.selectedFields);
+  const ordered = [
+    ...state.selectedFields,
+    ...state.previewFields.filter((field) => !selectedSet.has(field)),
+  ].filter((field) => !search || field.toLowerCase().includes(search));
+
+  $("selectedFieldCount").textContent =
+    `${state.selectedFields.length} selected`;
+
+  if (!ordered.length) {
+    list.innerHTML = '<div class="field-empty">No fields match this search.</div>';
+    return;
+  }
+
+  list.innerHTML = ordered.map((field) => {
+    const selectedIndex = state.selectedFields.indexOf(field);
+    const checked = selectedIndex >= 0;
+    return `<div class="field-row" data-field="${escapeHtml(field)}">
+      <input class="field-check" type="checkbox" ${checked ? "checked" : ""} aria-label="Export ${escapeHtml(field)}" />
+      <code title="${escapeHtml(field)}">${escapeHtml(field)}</code>
+      <span class="field-order">${checked ? selectedIndex + 1 : "—"}</span>
+      <button class="field-move field-up" type="button" ${!checked || selectedIndex === 0 ? "disabled" : ""} aria-label="Move ${escapeHtml(field)} up">↑</button>
+      <button class="field-move field-down" type="button" ${!checked || selectedIndex === state.selectedFields.length - 1 ? "disabled" : ""} aria-label="Move ${escapeHtml(field)} down">↓</button>
+    </div>`;
+  }).join("");
+
+  list.querySelectorAll(".field-row").forEach((row) => {
+    const field = row.dataset.field;
+    row.querySelector(".field-check").addEventListener("change", (event) => {
+      if (event.target.checked) {
+        if (!state.selectedFields.includes(field)) state.selectedFields.push(field);
+      } else {
+        state.selectedFields = state.selectedFields.filter((item) => item !== field);
+      }
+      renderFieldSelector();
+      renderEffectiveRequest();
+    });
+    row.querySelector(".field-up").addEventListener("click", () => moveSelectedField(field, -1));
+    row.querySelector(".field-down").addEventListener("click", () => moveSelectedField(field, 1));
+  });
+}
+
 function updateDestinationUI() {
   const type = selectedDestinationType();
   $("s3Panel").classList.toggle("hidden", type !== "s3");
@@ -572,6 +659,7 @@ async function previewQuery() {
     $("estimatedSize").textContent = humanBytes(result.estimated_bytes);
     $("queryTime").textContent = result.took_ms == null ? "—" : `${result.took_ms} ms`;
     renderPreview(result.rows);
+    updateDiscoveredFields(result.fields || []);
     if (result.warnings?.length) {
       setStatus(
         "queryStatus",
@@ -613,8 +701,12 @@ async function runExport() {
   try {
     setBusy(button, true, "Running export…");
     setStatus("runStatus", "Creating export job…");
+    if (state.previewFields.length && !state.selectedFields.length) {
+      throw new Error("Select at least one export field.");
+    }
     const payload = {
       ...basePayload(),
+      selected_fields: state.previewFields.length ? [...state.selectedFields] : null,
       format: document.querySelector('input[name="format"]:checked')?.value || "csv",
       compress: $("compress").checked,
       filename: $("filename").value.trim() || "stellar-export",
@@ -698,6 +790,17 @@ function initialize() {
   $("splitFiles").addEventListener("change", updateSplitUI);
   $("selectAllSources").addEventListener("click", () => setAllSources(true));
   $("clearSources").addEventListener("click", () => setAllSources(false));
+  $("fieldSearch").addEventListener("input", renderFieldSelector);
+  $("selectAllFields").addEventListener("click", () => {
+    state.selectedFields = [...state.previewFields];
+    renderFieldSelector();
+    renderEffectiveRequest();
+  });
+  $("clearFields").addEventListener("click", () => {
+    state.selectedFields = [];
+    renderFieldSelector();
+    renderEffectiveRequest();
+  });
   $("sftpAuthMethod").addEventListener("change", updateSftpAuthUI);
   document.querySelectorAll('input[name="queryMode"]').forEach((radio) => {
     radio.addEventListener("change", updateQueryModeUI);

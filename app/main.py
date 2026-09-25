@@ -19,10 +19,12 @@ from .destinations import test_s3, test_sftp, upload_s3, upload_sftp
 from .exporter import (
     ExportEngine,
     csv_stream,
+    discover_fields,
     file_stream,
     gzip_stream,
     iter_export_part_files,
     json_stream,
+    project_records,
 )
 from .models import (
     ConnectionInput,
@@ -106,6 +108,9 @@ def build_export_source(payload: ExportInput):
         payload.query,
         payload.stellar_query,
     )
+    if payload.selected_fields:
+        raw_query["_source"] = list(payload.selected_fields)
+
     engine = ExportEngine(
         client,
         index=plan_indices(payload.sources, start=payload.start, end=payload.end).target,
@@ -122,9 +127,14 @@ def build_export_source(payload: ExportInput):
     if isinstance(requested_source, list):
         preferred_fields = [str(field) for field in requested_source]
 
+    records = engine.iter_documents()
+    if payload.selected_fields:
+        records = project_records(records, payload.selected_fields)
+        preferred_fields = list(payload.selected_fields)
+
     content_type = "text/csv" if payload.format == "csv" else "application/json"
     filename = safe_filename(payload.filename, payload.format, payload.compress)
-    return engine.iter_documents(), preferred_fields, content_type, filename
+    return records, preferred_fields, content_type, filename
 
 
 def build_output(payload: ExportInput):
@@ -343,6 +353,7 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
         "took_ms": response.get("took"),
         "estimated_bytes": estimated_bytes,
         "rows": rows,
+        "fields": discover_fields(rows),
         "warnings": warnings,
         "index_plan": index_plan_result.as_dict(),
     }

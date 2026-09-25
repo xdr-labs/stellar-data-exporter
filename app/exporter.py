@@ -36,6 +36,58 @@ def flatten_record(value: Any, prefix: str = "", out: dict[str, Any] | None = No
     return out
 
 
+_MISSING = object()
+
+
+def _get_path(record: dict[str, Any], path: str) -> Any:
+    current: Any = record
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return _MISSING
+        current = current[part]
+    return current
+
+
+def _set_path(target: dict[str, Any], path: str, value: Any) -> None:
+    parts = path.split(".")
+    current = target
+    for part in parts[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[parts[-1]] = value
+
+
+def project_record(record: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    projected: dict[str, Any] = {}
+    for field in fields:
+        value = _get_path(record, field)
+        if value is not _MISSING:
+            _set_path(projected, field, value)
+    return projected
+
+
+def discover_fields(records: list[dict[str, Any]]) -> list[str]:
+    fields: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        for field in flatten_record(record):
+            if field and field not in seen:
+                seen.add(field)
+                fields.append(field)
+    return fields
+
+
+async def project_records(
+    records: AsyncIterator[dict[str, Any]],
+    fields: list[str],
+) -> AsyncIterator[dict[str, Any]]:
+    async for record in records:
+        yield project_record(record, fields)
+
+
 class ExportEngine:
     def __init__(
         self,
