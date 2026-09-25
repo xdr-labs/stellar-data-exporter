@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 import app.destinations as destinations
@@ -12,6 +14,7 @@ class FakeS3:
         self.created = []
         self.parts = []
         self.completed = []
+        self.aborted = []
 
     def put_object(self, **kwargs):
         self.puts.append(kwargs)
@@ -30,6 +33,7 @@ class FakeS3:
         return {}
 
     def abort_multipart_upload(self, **kwargs):
+        self.aborted.append(kwargs)
         return {}
 
 
@@ -89,3 +93,30 @@ async def test_large_s3_export_uses_multipart(monkeypatch):
     assert len(fake.created) == 1
     assert [part["Body"] for part in fake.parts] == [b"abcd", b"efgh", b"i"]
     assert len(fake.completed) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_multipart_s3_export_aborts_upload(monkeypatch):
+    fake = FakeS3()
+    monkeypatch.setattr(destinations, "_s3_client", lambda _: fake)
+    monkeypatch.setattr(destinations, "S3_PART_SIZE", 4)
+    checks = 0
+
+    def cancelled():
+        nonlocal checks
+        checks += 1
+        return checks >= 2
+
+    with pytest.raises(asyncio.CancelledError):
+        await upload_s3(
+            s3_destination(),
+            "cancelled.csv",
+            bytes_stream(b"abcd", b"efgh"),
+            content_type="text/csv",
+            cancel_check=cancelled,
+        )
+
+    assert len(fake.created) == 1
+    assert len(fake.parts) == 1
+    assert len(fake.aborted) == 1
+    assert not fake.completed

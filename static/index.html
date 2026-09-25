@@ -360,6 +360,28 @@
           </div>
           <p class="summary-note final-note">Credentials stay in memory only; remote-job credentials are discarded after completion.</p>
           <div id="runStatus" class="status hidden"></div>
+          <div id="exportProgress" class="export-progress hidden">
+            <div class="export-progress-head">
+              <div>
+                <span class="export-progress-label">Export job</span>
+                <strong id="progressStatus">Pending</strong>
+              </div>
+              <button id="cancelExport" class="button secondary small" type="button">Cancel</button>
+            </div>
+            <div class="export-progress-grid">
+              <div><span>Records</span><strong id="progressRecords">0</strong></div>
+              <div><span>Transferred</span><strong id="progressBytes">0 B</strong></div>
+              <div><span>Files</span><strong id="progressFiles">0</strong></div>
+              <div><span>Rate</span><strong id="progressRate">0 rec/s</strong></div>
+              <div><span>Queries</span><strong id="progressQueries">0</strong></div>
+              <div><span>Retries</span><strong id="progressRetries">0</strong></div>
+              <div><span>Elapsed</span><strong id="progressElapsed">0s</strong></div>
+            </div>
+            <div class="export-progress-range">
+              <span>Current range</span>
+              <code id="progressRange">Waiting to start</code>
+            </div>
+          </div>
         </div>
         <button id="runExport" class="button run final-run">Run export</button>
       </section>

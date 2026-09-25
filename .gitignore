@@ -10,3 +10,4 @@ htmlcov/
 .DS_Store
 .e2e/
 .tls/
+.tmp-audit/

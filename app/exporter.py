@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 import zlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,6 +19,10 @@ from .stellar import StellarClient
 
 
 class DenseSliceError(RuntimeError):
+    pass
+
+
+class ExportCancelled(RuntimeError):
     pass
 
 
@@ -101,6 +105,10 @@ class ExportEngine:
         target_records: int,
         minimum_slice_ms: int,
         max_records: int | None = None,
+        on_query: Callable[[], None] | None = None,
+        on_slice: Callable[[datetime, datetime], None] | None = None,
+        on_record: Callable[[], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ):
         self.client = client
         self.index = index
@@ -111,6 +119,19 @@ class ExportEngine:
         self.target_records = target_records
         self.minimum_slice = timedelta(milliseconds=minimum_slice_ms)
         self.max_records = max_records
+        self.on_query = on_query
+        self.on_slice = on_slice
+        self.on_record = on_record
+        self.cancel_check = cancel_check
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_check and self.cancel_check():
+            raise ExportCancelled("Export cancelled")
+
+    def _mark_query(self) -> None:
+        self._check_cancelled()
+        if self.on_query:
+            self.on_query()
 
     async def _count(self, start: datetime, end: datetime) -> int:
         body = build_document_query(
@@ -121,6 +142,7 @@ class ExportEngine:
             size=0,
             track_total_hits=True,
         )
+        self._mark_query()
         response = await self.client.search(self.index, body)
         count, exact = total_hits(response)
         if not exact:
@@ -136,6 +158,7 @@ class ExportEngine:
             size=self.target_records,
             track_total_hits=True,
         )
+        self._mark_query()
         response = await self.client.search(self.index, body)
         count, exact = total_hits(response)
         if not exact:
@@ -147,7 +170,10 @@ class ExportEngine:
         stack: list[tuple[datetime, datetime]] = [(self.start, self.end)]
         emitted = 0
         while stack:
+            self._check_cancelled()
             start, end = stack.pop()
+            if self.on_slice:
+                self.on_slice(start, end)
             count = await self._count(start, end)
             if count == 0:
                 continue
@@ -176,9 +202,12 @@ class ExportEngine:
                 continue
 
             for record in records:
+                self._check_cancelled()
                 if self.max_records is not None and emitted >= self.max_records:
                     return
                 emitted += 1
+                if self.on_record:
+                    self.on_record()
                 yield record
 
 

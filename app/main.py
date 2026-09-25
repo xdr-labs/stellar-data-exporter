@@ -14,10 +14,10 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
-from starlette.background import BackgroundTask
 
 from .destinations import test_s3, test_sftp, upload_s3, upload_sftp
 from .exporter import (
+    ExportCancelled,
     ExportEngine,
     csv_stream,
     discover_fields,
@@ -60,7 +60,16 @@ class ExportJob:
     created_at: float
     payload: ExportInput | None
     status: str = "pending"
+    started_at: float | None = None
+    completed_at: float | None = None
     bytes_sent: int = 0
+    records_exported: int = 0
+    files_completed: int = 0
+    query_count: int = 0
+    retry_count: int = 0
+    current_slice_start: str | None = None
+    current_slice_end: str | None = None
+    cancel_requested: bool = False
     result: str | None = None
     error: str | None = None
     task: asyncio.Task | None = field(default=None, repr=False)
@@ -70,22 +79,29 @@ EXPORT_JOBS: dict[str, ExportJob] = {}
 app = FastAPI(title="Stellar Data Exporter", version="0.1.0")
 
 
-def client_for(payload: ConnectionInput | QueryInput) -> StellarClient:
+def client_for(
+    payload: ConnectionInput | QueryInput,
+    *,
+    on_retry=None,
+) -> StellarClient:
     return StellarClient(
         str(payload.host),
         payload.email,
         payload.token,
         payload.verify_tls,
+        on_retry=on_retry,
     )
 
 
 def cleanup_jobs() -> None:
     now = time.time()
     for job_id, job in list(EXPORT_JOBS.items()):
-        age = now - job.created_at
-        if job.status == "pending" and job.payload is not None and age > DOWNLOAD_JOB_TTL_SECONDS:
+        pending_age = now - job.created_at
+        terminal_anchor = job.completed_at or job.created_at
+        terminal_age = now - terminal_anchor
+        if job.status == "pending" and job.payload is not None and pending_age > DOWNLOAD_JOB_TTL_SECONDS:
             EXPORT_JOBS.pop(job_id, None)
-        elif job.status in {"completed", "failed"} and age > HISTORY_JOB_TTL_SECONDS:
+        elif job.status in {"completed", "failed", "cancelled"} and terminal_age > HISTORY_JOB_TTL_SECONDS:
             EXPORT_JOBS.pop(job_id, None)
 
 
@@ -102,8 +118,12 @@ def safe_filename(name: str | None, fmt: str, compressed: bool) -> str:
     return candidate
 
 
-def build_export_source(payload: ExportInput):
-    client = client_for(payload)
+def build_export_source(payload: ExportInput, job: ExportJob | None = None):
+    def add_retry(count: int) -> None:
+        if job is not None:
+            job.retry_count += count
+
+    client = client_for(payload, on_retry=add_retry if job is not None else None)
     raw_query = compile_user_query(
         payload.query_mode,
         payload.query,
@@ -111,6 +131,19 @@ def build_export_source(payload: ExportInput):
     )
     if payload.selected_fields:
         raw_query["_source"] = list(payload.selected_fields)
+
+    def on_query() -> None:
+        if job is not None:
+            job.query_count += 1
+
+    def on_slice(start, end) -> None:
+        if job is not None:
+            job.current_slice_start = start.isoformat()
+            job.current_slice_end = end.isoformat()
+
+    def on_record() -> None:
+        if job is not None:
+            job.records_exported += 1
 
     engine = ExportEngine(
         client,
@@ -122,6 +155,10 @@ def build_export_source(payload: ExportInput):
         target_records=payload.target_records_per_slice,
         minimum_slice_ms=payload.minimum_slice_ms,
         max_records=payload.record_limit,
+        on_query=on_query if job is not None else None,
+        on_slice=on_slice if job is not None else None,
+        on_record=on_record if job is not None else None,
+        cancel_check=(lambda: job.cancel_requested) if job is not None else None,
     )
 
     preferred_fields = None
@@ -139,8 +176,8 @@ def build_export_source(payload: ExportInput):
     return records, preferred_fields, content_type, filename
 
 
-def build_output(payload: ExportInput):
-    records, preferred_fields, content_type, filename = build_export_source(payload)
+def build_output(payload: ExportInput, job: ExportJob | None = None):
+    records, preferred_fields, content_type, filename = build_export_source(payload, job)
     if payload.format == "csv":
         stream = csv_stream(records, preferred_fields)
     else:
@@ -152,10 +189,10 @@ def build_output(payload: ExportInput):
     return stream, content_type, filename
 
 
-def build_output_parts(payload: ExportInput):
+def build_output_parts(payload: ExportInput, job: ExportJob | None = None):
     if payload.max_file_size_bytes is None:
         raise ValueError("Split output requires max_file_size_bytes")
-    records, preferred_fields, content_type, filename = build_export_source(payload)
+    records, preferred_fields, content_type, filename = build_export_source(payload, job)
     parts = iter_export_part_files(
         records,
         format=payload.format,
@@ -167,22 +204,87 @@ def build_output_parts(payload: ExportInput):
     return parts, content_type, filename
 
 
+def mark_job_started(job: ExportJob) -> None:
+    if job.started_at is None:
+        job.started_at = time.time()
+    job.status = "running"
+
+
+def mark_job_terminal(job: ExportJob, status: str, error: str | None = None) -> None:
+    job.status = status
+    job.error = error
+    job.completed_at = time.time()
+
+
+def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
+    end_time = job.completed_at or time.time()
+    elapsed = max(0.0, end_time - job.started_at) if job.started_at else 0.0
+    rate = (job.records_exported / elapsed) if elapsed > 0 else 0.0
+    return {
+        "job_id": job_id,
+        "status": job.status,
+        "records_exported": job.records_exported,
+        "bytes_sent": job.bytes_sent,
+        "files_completed": job.files_completed,
+        "current_slice_start": job.current_slice_start,
+        "current_slice_end": job.current_slice_end,
+        "query_count": job.query_count,
+        "retry_count": job.retry_count,
+        "elapsed_seconds": elapsed,
+        "rate_records_per_second": rate,
+        "cancel_requested": job.cancel_requested,
+        "result": job.result,
+        "error": job.error,
+    }
+
+
+async def tracked_download_stream(
+    job: ExportJob,
+    stream,
+    *,
+    result: str,
+    cleanup_paths: list[str] | None = None,
+):
+    try:
+        async for chunk in stream:
+            if job.cancel_requested:
+                raise ExportCancelled("Export cancelled")
+            job.bytes_sent += len(chunk)
+            yield chunk
+        if job.cancel_requested:
+            raise ExportCancelled("Export cancelled")
+        if job.files_completed == 0:
+            job.files_completed = 1
+        job.result = result
+        mark_job_terminal(job, "completed")
+    except (ExportCancelled, asyncio.CancelledError):
+        mark_job_terminal(job, "cancelled")
+        return
+    except Exception as exc:
+        mark_job_terminal(job, "failed", str(exc)[:2000])
+        raise
+    finally:
+        for path in cleanup_paths or []:
+            if os.path.exists(path):
+                os.unlink(path)
+        job.payload = None
+        job.task = None
+
+
 async def run_destination_job(job_id: str) -> None:
     job = EXPORT_JOBS.get(job_id)
     if job is None or job.payload is None:
         return
 
     payload = job.payload
-    job.status = "running"
+    mark_job_started(job)
 
     def add_bytes(count: int) -> None:
         job.bytes_sent += count
 
-    async def upload_one(
-        filename: str,
-        stream,
-        content_type: str,
-    ) -> str:
+    async def upload_one(filename: str, stream, content_type: str) -> str:
+        if job.cancel_requested:
+            raise ExportCancelled("Export cancelled")
         if isinstance(payload.destination, S3Destination):
             return await upload_s3(
                 payload.destination,
@@ -191,6 +293,7 @@ async def run_destination_job(job_id: str) -> None:
                 content_type=content_type,
                 content_encoding="gzip" if payload.compress else None,
                 on_bytes=add_bytes,
+                cancel_check=lambda: job.cancel_requested,
             )
         if isinstance(payload.destination, SFTPDestination):
             return await upload_sftp(
@@ -198,41 +301,42 @@ async def run_destination_job(job_id: str) -> None:
                 filename,
                 stream,
                 on_bytes=add_bytes,
+                cancel_check=lambda: job.cancel_requested,
             )
         raise RuntimeError("Unsupported background destination")
 
     try:
         if payload.max_file_size_bytes is None:
-            stream, content_type, filename = build_output(payload)
+            stream, content_type, filename = build_output(payload, job)
             job.result = await upload_one(filename, stream, content_type)
+            job.files_completed = 1
         else:
-            parts, content_type, _ = build_output_parts(payload)
+            parts, content_type, _ = build_output_parts(payload, job)
             results: list[str] = []
             async for part in parts:
                 try:
                     results.append(
-                        await upload_one(
-                            part.filename,
-                            file_stream(part.path),
-                            content_type,
-                        )
+                        await upload_one(part.filename, file_stream(part.path), content_type)
                     )
+                    job.files_completed += 1
                 finally:
                     if os.path.exists(part.path):
                         os.unlink(part.path)
 
             if len(results) == 1:
                 job.result = results[0]
-            else:
-                job.result = (
-                    f"{len(results)} files: {results[0]} ... {results[-1]}"
-                )
-        job.status = "completed"
+            elif results:
+                job.result = f"{len(results)} files: {results[0]} ... {results[-1]}"
+        if job.cancel_requested:
+            raise ExportCancelled("Export cancelled")
+        mark_job_terminal(job, "completed")
+    except (ExportCancelled, asyncio.CancelledError):
+        mark_job_terminal(job, "cancelled")
     except Exception as exc:
-        job.status = "failed"
-        job.error = str(exc)[:2000]
+        mark_job_terminal(job, "failed", str(exc)[:2000])
     finally:
         job.payload = None
+        job.task = None
 
 
 @app.get("/")
@@ -371,19 +475,24 @@ async def create_export_job(payload: ExportInput) -> dict[str, str]:
     job_id = uuid.uuid4().hex
     job = ExportJob(created_at=time.time(), payload=payload)
     EXPORT_JOBS[job_id] = job
+    status_url = f"/api/export/jobs/{job_id}"
+    cancel_url = f"/api/export/jobs/{job_id}/cancel"
 
     if isinstance(payload.destination, DownloadDestination):
         return {
             "job_id": job_id,
             "mode": "download",
             "download_url": f"/api/export/jobs/{job_id}/download",
+            "status_url": status_url,
+            "cancel_url": cancel_url,
         }
 
     job.task = asyncio.create_task(run_destination_job(job_id))
     return {
         "job_id": job_id,
         "mode": "background",
-        "status_url": f"/api/export/jobs/{job_id}",
+        "status_url": status_url,
+        "cancel_url": cancel_url,
     }
 
 
@@ -393,53 +502,90 @@ async def export_job_status(job_id: str) -> dict[str, Any]:
     job = EXPORT_JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Export job not found or expired")
-    return {
-        "job_id": job_id,
-        "status": job.status,
-        "bytes_sent": job.bytes_sent,
-        "result": job.result,
-        "error": job.error,
-    }
+    return job_status_payload(job_id, job)
+
+
+@app.post("/api/export/jobs/{job_id}/cancel")
+async def cancel_export_job(job_id: str) -> dict[str, Any]:
+    cleanup_jobs()
+    job = EXPORT_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Export job not found or expired")
+    if job.status in {"completed", "failed", "cancelled"}:
+        return job_status_payload(job_id, job)
+
+    job.cancel_requested = True
+    if job.status == "pending":
+        job.payload = None
+        job.task = None
+        mark_job_terminal(job, "cancelled")
+    return job_status_payload(job_id, job)
+
+
+def cleanup_paths(paths: list[str]) -> None:
+    for path in paths:
+        if path and os.path.exists(path):
+            os.unlink(path)
 
 
 @app.get("/api/export/jobs/{job_id}/download")
 async def download_export(job_id: str):
     cleanup_jobs()
-    job = EXPORT_JOBS.pop(job_id, None)
-    if job is None or job.payload is None:
+    job = EXPORT_JOBS.get(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="Export job not found or expired")
+    if job.status == "cancelled":
+        raise HTTPException(status_code=409, detail="Export job was cancelled")
+    if job.status != "pending" or job.payload is None:
+        raise HTTPException(status_code=409, detail="Export job has already started")
     if not isinstance(job.payload.destination, DownloadDestination):
         raise HTTPException(status_code=400, detail="This job is not a browser download")
 
     payload = job.payload
+    mark_job_started(job)
+
     if payload.max_file_size_bytes is None:
-        stream, content_type, filename = build_output(payload)
+        stream, content_type, filename = build_output(payload, job)
         media_type = "application/gzip" if payload.compress else content_type
         headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-        return StreamingResponse(stream, media_type=media_type, headers=headers)
+        tracked = tracked_download_stream(job, stream, result=filename)
+        return StreamingResponse(tracked, media_type=media_type, headers=headers)
 
-    parts, content_type, filename = build_output_parts(payload)
-    completed_parts = [part async for part in parts]
-
-    if len(completed_parts) == 1:
-        part = completed_parts[0]
-        media_type = "application/gzip" if payload.compress else content_type
-        return FileResponse(
-            part.path,
-            media_type=media_type,
-            filename=part.filename,
-            background=BackgroundTask(os.unlink, part.path),
-        )
-
-    archive = tempfile.NamedTemporaryFile(
-        prefix="stellar-export-",
-        suffix=".zip",
-        delete=False,
-    )
-    archive_path = archive.name
-    archive.close()
-
+    completed_paths: list[str] = []
+    archive_path: str | None = None
     try:
+        parts, content_type, filename = build_output_parts(payload, job)
+        completed_parts = []
+        async for part in parts:
+            completed_parts.append(part)
+            completed_paths.append(part.path)
+            job.files_completed += 1
+            if job.cancel_requested:
+                raise ExportCancelled("Export cancelled")
+
+        if job.cancel_requested:
+            raise ExportCancelled("Export cancelled")
+
+        if len(completed_parts) == 1:
+            part = completed_parts[0]
+            media_type = "application/gzip" if payload.compress else content_type
+            headers = {"Content-Disposition": f'attachment; filename="{part.filename}"'}
+            tracked = tracked_download_stream(
+                job,
+                file_stream(part.path),
+                result=part.filename,
+                cleanup_paths=[part.path],
+            )
+            return StreamingResponse(tracked, media_type=media_type, headers=headers)
+
+        archive = tempfile.NamedTemporaryFile(
+            prefix="stellar-export-",
+            suffix=".zip",
+            delete=False,
+        )
+        archive_path = archive.name
+        archive.close()
+
         with zipfile.ZipFile(
             archive_path,
             "w",
@@ -447,21 +593,43 @@ async def download_export(job_id: str):
         ) as bundle:
             for part in completed_parts:
                 bundle.write(part.path, arcname=part.filename)
-    finally:
-        for part in completed_parts:
-            if os.path.exists(part.path):
-                os.unlink(part.path)
 
-    archive_name = re.sub(
-        r"(\.csv|\.json)(\.gz)?$",
-        "",
-        filename,
-        flags=re.IGNORECASE,
-    )
-    archive_name = f"{archive_name}-parts.zip"
-    return FileResponse(
-        archive_path,
-        media_type="application/zip",
-        filename=archive_name,
-        background=BackgroundTask(os.unlink, archive_path),
-    )
+        cleanup_paths(completed_paths)
+        completed_paths.clear()
+
+        if job.cancel_requested:
+            raise ExportCancelled("Export cancelled")
+
+        archive_name = re.sub(
+            r"(\.csv|\.json)(\.gz)?$",
+            "",
+            filename,
+            flags=re.IGNORECASE,
+        )
+        archive_name = f"{archive_name}-parts.zip"
+        headers = {"Content-Disposition": f'attachment; filename="{archive_name}"'}
+        tracked = tracked_download_stream(
+            job,
+            file_stream(archive_path),
+            result=archive_name,
+            cleanup_paths=[archive_path],
+        )
+        return StreamingResponse(
+            tracked,
+            media_type="application/zip",
+            headers=headers,
+        )
+    except (ExportCancelled, asyncio.CancelledError):
+        cleanup_paths(completed_paths)
+        cleanup_paths([archive_path] if archive_path else [])
+        job.payload = None
+        job.task = None
+        mark_job_terminal(job, "cancelled")
+        raise HTTPException(status_code=409, detail="Export job was cancelled")
+    except Exception as exc:
+        cleanup_paths(completed_paths)
+        cleanup_paths([archive_path] if archive_path else [])
+        job.payload = None
+        job.task = None
+        mark_job_terminal(job, "failed", str(exc)[:2000])
+        raise

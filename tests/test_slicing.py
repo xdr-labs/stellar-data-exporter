@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.exporter import ExportEngine
+from app.exporter import ExportCancelled, ExportEngine
 
 
 class FakeClient:
@@ -64,3 +64,37 @@ async def test_engine_stops_exactly_at_global_record_limit():
     assert len(records) == 7
     fetch_sizes = [size for _, _, size in client.calls if size > 0]
     assert len(fetch_sizes) == 2
+
+
+@pytest.mark.asyncio
+async def test_engine_honors_cancellation_during_record_iteration():
+    client = FakeClient()
+    cancelled = False
+    emitted = 0
+
+    def on_record():
+        nonlocal cancelled, emitted
+        emitted += 1
+        if emitted == 1:
+            cancelled = True
+
+    engine = ExportEngine(
+        client,
+        index="aella-ser-*",
+        raw_query={"query": {"match_all": {}}},
+        time_field="timestamp",
+        start=datetime(2026, 9, 1, 0, 0, tzinfo=UTC),
+        end=datetime(2026, 9, 1, 0, 0, 2, tzinfo=UTC),
+        target_records=10,
+        minimum_slice_ms=1,
+        on_record=on_record,
+        cancel_check=lambda: cancelled,
+    )
+
+    records = []
+    with pytest.raises(ExportCancelled):
+        async for record in engine.iter_documents():
+            records.append(record)
+
+    assert len(records) == 1
+    assert emitted == 1

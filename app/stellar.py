@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
 
@@ -35,12 +36,14 @@ class StellarClient:
         token: str,
         verify_tls: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
+        on_retry: Callable[[int], None] | None = None,
     ):
         self.host = host.rstrip("/")
         self.email = email
         self.token = token
         self.verify_tls = verify_tls
         self.transport = transport
+        self.on_retry = on_retry
         self._jwt: str | None = None
         self._jwt_obtained_at = 0.0
         self._jwt_lock = asyncio.Lock()
@@ -123,6 +126,8 @@ class StellarClient:
                     )
                     if response.status_code != 401 or attempt == 1:
                         break
+                    if self.on_retry:
+                        self.on_retry(1)
         except httpx.RequestError as exc:
             raise StellarConnectionError(
                 "Connection to Stellar Cyber failed while querying data. Check the host, network path, and TLS settings."

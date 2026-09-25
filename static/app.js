@@ -11,6 +11,7 @@ const state = {
   indexPlanRequest: 0,
   previewFields: [],
   selectedFields: [],
+  activeExport: null,
 };
 
 function isoFromLocal(value) {
@@ -857,18 +858,82 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function humanDuration(seconds) {
+  const value = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (value < 60) return `${value}s`;
+  const minutes = Math.floor(value / 60);
+  const rest = value % 60;
+  if (minutes < 60) return `${minutes}m ${rest}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function renderExportProgress(status) {
+  $("exportProgress").classList.remove("hidden");
+  $("progressStatus").textContent = status.status || "pending";
+  $("progressRecords").textContent = Number(status.records_exported || 0).toLocaleString();
+  $("progressBytes").textContent = humanBytes(status.bytes_sent || 0);
+  $("progressFiles").textContent = Number(status.files_completed || 0).toLocaleString();
+  $("progressQueries").textContent = Number(status.query_count || 0).toLocaleString();
+  $("progressRetries").textContent = Number(status.retry_count || 0).toLocaleString();
+  $("progressElapsed").textContent = humanDuration(status.elapsed_seconds);
+  const rate = Number(status.rate_records_per_second || 0);
+  $("progressRate").textContent = `${rate.toFixed(rate >= 10 ? 1 : 2)} rec/s`;
+  $("progressRange").textContent =
+    status.current_slice_start && status.current_slice_end
+      ? `${status.current_slice_start} → ${status.current_slice_end}`
+      : "Waiting to start";
+
+  const terminal = ["completed", "failed", "cancelled"].includes(status.status);
+  $("cancelExport").disabled = terminal || !!status.cancel_requested || !state.activeExport;
+  $("cancelExport").textContent = status.cancel_requested && !terminal ? "Cancelling…" : "Cancel";
+}
+
+async function cancelExport() {
+  if (!state.activeExport?.cancelUrl) return;
+  const button = $("cancelExport");
+  try {
+    button.disabled = true;
+    button.textContent = "Cancelling…";
+    const status = await api(state.activeExport.cancelUrl, {method: "POST"});
+    renderExportProgress(status);
+    if (status.status === "cancelled") {
+      setStatus("runStatus", "Export cancelled.", "warning");
+    } else {
+      setStatus("runStatus", "Cancellation requested. Finishing the current operation safely…", "warning");
+    }
+  } catch (error) {
+    setStatus("runStatus", error.message, "error");
+    button.disabled = false;
+    button.textContent = "Cancel";
+  }
+}
+
 async function pollExport(statusUrl) {
   for (;;) {
     const status = await api(statusUrl);
+    renderExportProgress(status);
     if (status.status === "completed") {
-      setStatus("runStatus", `Completed: ${status.result} · ${humanBytes(status.bytes_sent)} streamed.`, "success");
-      return;
+      setStatus(
+        "runStatus",
+        `Completed: ${status.result || "export finished"} · ${Number(status.records_exported || 0).toLocaleString()} records · ${humanBytes(status.bytes_sent)} transferred.`,
+        "success",
+      );
+      return status;
+    }
+    if (status.status === "cancelled") {
+      setStatus("runStatus", "Export cancelled.", "warning");
+      return status;
     }
     if (status.status === "failed") {
-      throw new Error(status.error || "Remote export failed.");
+      throw new Error(status.error || "Export failed.");
     }
-    setStatus("runStatus", `Uploading… ${humanBytes(status.bytes_sent)} streamed.`);
-    await wait(1000);
+    const verb = status.cancel_requested ? "Cancelling" : status.status === "pending" ? "Preparing" : "Exporting";
+    setStatus(
+      "runStatus",
+      `${verb}… ${Number(status.records_exported || 0).toLocaleString()} records · ${humanBytes(status.bytes_sent)} transferred.`,
+    );
+    await wait(500);
   }
 }
 
@@ -895,15 +960,32 @@ async function runExport() {
       body: JSON.stringify(payload),
     });
 
+    state.activeExport = {
+      jobId: result.job_id,
+      statusUrl: result.status_url,
+      cancelUrl: result.cancel_url,
+    };
+    renderExportProgress({
+      status: "pending",
+      records_exported: 0,
+      bytes_sent: 0,
+      files_completed: 0,
+      query_count: 0,
+      retry_count: 0,
+      elapsed_seconds: 0,
+      rate_records_per_second: 0,
+    });
+
     if (result.mode === "download") {
       $("downloadFrame").src = result.download_url;
-      setStatus("runStatus", "Download started. Large ranges will be sliced automatically.", "success");
-    } else {
-      await pollExport(result.status_url);
+      setStatus("runStatus", "Download started. Tracking export progress…");
     }
+    await pollExport(result.status_url);
   } catch (error) {
     setStatus("runStatus", error.message, "error");
   } finally {
+    state.activeExport = null;
+    $("cancelExport").disabled = true;
     setBusy(button, false);
   }
 }
@@ -969,6 +1051,7 @@ function initialize() {
   $("copyRequestPath").addEventListener("click", () => copyInspectorText($("requestPath").textContent, "Request path"));
   $("copyCurl").addEventListener("click", () => copyInspectorText(buildRedactedCurl(), "cURL"));
   $("runExport").addEventListener("click", runExport);
+  $("cancelExport").addEventListener("click", cancelExport);
   $("splitFiles").addEventListener("change", updateSplitUI);
   document.querySelectorAll('input[name="exportRecords"]').forEach((radio) => {
     radio.addEventListener("change", updateRecordLimitUI);

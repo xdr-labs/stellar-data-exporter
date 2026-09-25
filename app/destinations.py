@@ -12,6 +12,7 @@ from .models import S3Destination, SFTPDestination
 
 
 ProgressCallback = Callable[[int], None]
+CancelCheck = Callable[[], bool]
 S3_PART_SIZE = 8 * 1024 * 1024
 
 
@@ -50,6 +51,7 @@ async def upload_s3(
     content_type: str,
     content_encoding: str | None = None,
     on_bytes: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> str:
     client = _s3_client(destination)
     key = build_s3_key(destination.prefix, filename)
@@ -64,6 +66,8 @@ async def upload_s3(
 
     try:
         async for chunk in stream:
+            if cancel_check and cancel_check():
+                raise asyncio.CancelledError
             buffer.extend(chunk)
             if on_bytes:
                 on_bytes(len(chunk))
@@ -91,6 +95,9 @@ async def upload_s3(
                 parts.append({"ETag": response["ETag"], "PartNumber": part_number})
                 part_number += 1
 
+        if cancel_check and cancel_check():
+            raise asyncio.CancelledError
+
         if upload_id is None:
             await asyncio.to_thread(
                 client.put_object,
@@ -111,6 +118,9 @@ async def upload_s3(
                 )
                 parts.append({"ETag": response["ETag"], "PartNumber": part_number})
 
+            if cancel_check and cancel_check():
+                raise asyncio.CancelledError
+
             await asyncio.to_thread(
                 client.complete_multipart_upload,
                 Bucket=destination.bucket,
@@ -118,7 +128,7 @@ async def upload_s3(
                 UploadId=upload_id,
                 MultipartUpload={"Parts": parts},
             )
-    except Exception:
+    except BaseException:
         if upload_id is not None:
             try:
                 await asyncio.to_thread(
@@ -168,14 +178,26 @@ async def upload_sftp(
     stream: AsyncIterator[bytes],
     *,
     on_bytes: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> str:
     remote_file = build_sftp_path(destination.remote_path, filename)
     async with asyncssh.connect(**_sftp_connect_kwargs(destination)) as connection:
         async with connection.start_sftp_client() as sftp:
-            async with sftp.open(remote_file, "wb") as handle:
-                async for chunk in stream:
-                    await handle.write(chunk)
-                    if on_bytes:
-                        on_bytes(len(chunk))
+            try:
+                async with sftp.open(remote_file, "wb") as handle:
+                    async for chunk in stream:
+                        if cancel_check and cancel_check():
+                            raise asyncio.CancelledError
+                        await handle.write(chunk)
+                        if on_bytes:
+                            on_bytes(len(chunk))
+                if cancel_check and cancel_check():
+                    raise asyncio.CancelledError
+            except BaseException:
+                try:
+                    await sftp.remove(remote_file)
+                except Exception:
+                    pass
+                raise
 
     return f"sftp://{destination.host}:{destination.port}{remote_file}"

@@ -65,6 +65,7 @@ def test_preview_and_json_download(monkeypatch):
     job = client.post("/api/export/jobs", json=request)
     assert job.status_code == 200
     download_url = job.json()["download_url"]
+    status_url = job.json()["status_url"]
 
     download = client.get(download_url)
     assert download.status_code == 200
@@ -72,6 +73,16 @@ def test_preview_and_json_download(monkeypatch):
     assert download.headers["content-disposition"] == 'attachment; filename="alerts.json"'
     rows = download.json()
     assert [row["severity"] for row in rows] == [80, 90]
+
+    status = client.get(status_url)
+    assert status.status_code == 200
+    metrics = status.json()
+    assert metrics["status"] == "completed"
+    assert metrics["records_exported"] == 2
+    assert metrics["bytes_sent"] > 0
+    assert metrics["files_completed"] == 1
+    assert metrics["query_count"] == 2
+    assert metrics["elapsed_seconds"] >= 0
 
 
 def test_index_plan_endpoint_and_preview_use_date_scoped_target(monkeypatch):
@@ -267,3 +278,29 @@ def test_record_limit_stops_download_at_exact_n(monkeypatch):
     rows = download.json()
     assert len(rows) == 1
     assert rows[0]["srcip"] == "10.0.0.1"
+
+
+def test_pending_download_job_can_be_cancelled(monkeypatch):
+    monkeypatch.setattr(StellarClient, "search", fake_search)
+    client = TestClient(app)
+    request = {
+        **payload(),
+        "format": "json",
+        "compress": False,
+        "filename": "cancel-me",
+    }
+
+    created = client.post("/api/export/jobs", json=request)
+    assert created.status_code == 200
+    body = created.json()
+    cancelled = client.post(body["cancel_url"])
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["cancel_requested"] is True
+
+    status = client.get(body["status_url"])
+    assert status.status_code == 200
+    assert status.json()["status"] == "cancelled"
+
+    download = client.get(body["download_url"])
+    assert download.status_code == 409

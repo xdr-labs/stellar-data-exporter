@@ -107,3 +107,15 @@ details{border-top:1px solid #e5e1e2;padding-top:13px}summary{cursor:pointer;fon
 .mode-basic .hero{margin-bottom:16px}
 .mode-basic .summary-card{top:76px}
 @media(max-width:760px){.top-actions{gap:7px}.secure-badge{display:none}.ui-mode{padding:7px 9px}}
+
+
+.export-progress{margin-top:14px;padding:13px;border:1px solid #e2dcde;border-radius:10px;background:#fff}
+.export-progress-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.export-progress-head>div{display:flex;flex-direction:column;gap:2px}.export-progress-label{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:800}.export-progress-head strong{text-transform:capitalize;font-size:13px}
+.export-progress-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+.export-progress-grid>div{border:1px solid #eee8ea;border-radius:7px;background:#faf9f9;padding:7px 8px;min-width:0}
+.export-progress-grid span,.export-progress-range span{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:2px}
+.export-progress-grid strong{display:block;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.export-progress-range{margin-top:8px;border-top:1px solid #eee9eb;padding-top:8px}
+.export-progress-range code{display:block;font:10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#554e52;overflow:auto;white-space:nowrap}
+@media(max-width:760px){.export-progress-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

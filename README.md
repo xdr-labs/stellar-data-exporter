@@ -23,7 +23,9 @@ The first working slice is intentionally small:
 - S3-compatible upload (AWS S3, Cloudflare R2, MinIO) with multipart streaming
 - SFTP upload with password or SSH private-key authentication
 - split S3/SFTP exports write each numbered part separately
-- in-memory background job status for remote destinations
+- in-memory export job status for browser, S3-compatible, and SFTP destinations
+- live progress metrics: records, transferred bytes, files, current slice, queries, retries, rate, and elapsed time
+- cooperative cancellation with S3 multipart abort and SFTP partial-file cleanup
 
 ## Data flow
 
@@ -109,10 +111,17 @@ uv run --extra dev pytest -q
 node --check static/app.js
 ```
 
-## Next implementation slices
+## Roadmap after P0
 
-1. live Stellar Cyber lab verification of auth behavior, dense slices, API limits, and long-running exports.
-2. persistent export history without persisting source/destination credentials.
-3. resumable remote-destination jobs and checkpoint metadata.
-4. optional scheduled exports after the one-shot flow is validated.
-5. production hardening: reverse proxy, access boundary, rate limits, deployment/runbook.
+P1 user productivity:
+1. saved export profiles in browser localStorage, excluding credentials
+2. query history and favorites in browser localStorage
+3. relative time presets and custom relative ranges
+4. JSON Array / NDJSON plus CSV delimiter, header, BOM, and flatten controls
+
+P2 operationalization, after one-shot export is stable:
+1. persistent job store and export history without plaintext credentials
+2. checkpoint/resume and retry-from-checkpoint for remote destinations
+3. overlap/dedup strategy for resumed or scheduled exports
+4. optional scheduled exports with encrypted credential persistence
+5. production hardening: reverse proxy, access boundary, rate limits, deployment/runbook
