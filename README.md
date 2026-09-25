@@ -87,14 +87,13 @@ The adapter exchanges the account email and All-Access Token at
 10-minute lifetime, and refreshes automatically during long-running exports. A 401 from
 the data API forces one immediate JWT refresh and retry.
 
-## Run on dev-atlas
+## Run development HTTPS
 
 The development server is served directly over HTTPS on port 8787.
 
-Create or refresh the development certificate:
+Create or refresh a self-signed development certificate from the repository root:
 
 ```bash
-cd /home/aella/stellar-data-exporter
 ./scripts/generate-dev-cert.sh
 ```
 
@@ -104,23 +103,19 @@ Start the HTTPS service:
 ./scripts/run-dev-https.sh
 ```
 
-URLs:
+Open `https://localhost:8787` locally, or `https://<DEV_HOST>:8787` from another trusted machine.
 
-```text
-https://dev-atlas:8787
-https://221.139.249.116:8787
-```
-
-Health check for the current self-signed development certificate:
+Health check for the self-signed development certificate:
 
 ```bash
 curl -k https://127.0.0.1:8787/api/health
 ```
 
-The development certificate includes SAN entries for `dev-atlas`, `localhost`,
-`127.0.0.1`, and the current dev-atlas IP. It is self-signed, so browsers that do not
-trust the certificate will show a certificate warning. For an Internet-facing deployment,
-replace it with a certificate issued for the production DNS name by a trusted CA.
+The certificate includes SAN entries for the current short hostname, `localhost`,
+`127.0.0.1`, and the primary host IP detected when the certificate is generated. Override
+the detected values with `TLS_HOSTNAME` and `TLS_IP` when needed. Because the certificate
+is self-signed, browsers that do not trust it will show a warning. For an Internet-facing
+deployment, use a certificate issued for the production DNS name by a trusted CA.
 
 ## Production deployment
 

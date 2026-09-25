@@ -30,15 +30,15 @@ EOF
 
 openssl req -x509 -nodes -newkey rsa:2048 \
   -days 365 \
-  -keyout "$TLS_DIR/dev-atlas.key" \
-  -out "$TLS_DIR/dev-atlas.crt" \
+  -keyout "$TLS_DIR/dev-server.key" \
+  -out "$TLS_DIR/dev-server.crt" \
   -config "$TLS_DIR/openssl.cnf"
 
-chmod 600 "$TLS_DIR/dev-atlas.key"
-chmod 644 "$TLS_DIR/dev-atlas.crt"
+chmod 600 "$TLS_DIR/dev-server.key"
+chmod 644 "$TLS_DIR/dev-server.crt"
 
 echo "Created:"
-echo "  $TLS_DIR/dev-atlas.crt"
-echo "  $TLS_DIR/dev-atlas.key"
+echo "  $TLS_DIR/dev-server.crt"
+echo "  $TLS_DIR/dev-server.key"
 echo "SAN hostname: $HOSTNAME_VALUE"
 echo "SAN IP:       $IP_VALUE"
