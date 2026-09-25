@@ -40,11 +40,19 @@ def normalized_sdist_names(archive: Path) -> set[str]:
         }
 
 
-def wheel_contents(archive: Path) -> tuple[set[str], str]:
+def wheel_contents(archive: Path) -> tuple[set[str], str, str]:
     with zipfile.ZipFile(archive) as bundle:
         names = set(bundle.namelist())
         metadata = next(name for name in names if name.endswith(".dist-info/METADATA"))
-        return names, bundle.read(metadata).decode("utf-8")
+        entry_points = next(
+            (name for name in names if name.endswith(".dist-info/entry_points.txt")),
+            None,
+        )
+        return (
+            names,
+            bundle.read(metadata).decode("utf-8"),
+            bundle.read(entry_points).decode("utf-8") if entry_points else "",
+        )
 
 
 def require_all(actual: set[str], required: set[str], label: str) -> None:
@@ -64,7 +72,7 @@ def main() -> None:
         raise SystemExit("expected exactly one sdist and one wheel")
 
     require_all(normalized_sdist_names(sdists[0]), SDIST_REQUIRED, "sdist")
-    wheel_names, metadata = wheel_contents(wheels[0])
+    wheel_names, metadata, entry_points = wheel_contents(wheels[0])
     require_all(wheel_names, WHEEL_REQUIRED, "wheel")
 
     for value in (
@@ -74,6 +82,9 @@ def main() -> None:
     ):
         if value not in metadata:
             raise SystemExit(f"wheel metadata missing: {value}")
+
+    if "stellar-data-exporter = app.cli:main" not in entry_points:
+        raise SystemExit("wheel console entry point missing: stellar-data-exporter = app.cli:main")
 
     print("RELEASE_ARTIFACTS=PASS")
 

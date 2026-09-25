@@ -15,7 +15,7 @@ Environment=STELLAR_EXPORTER_SCHEDULE_DB=/var/lib/stellar-data-exporter/export-s
 Environment=STELLAR_EXPORTER_SCHEDULE_KEY_FILE=/var/lib/stellar-data-exporter/schedule.key
 Environment=STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS=30
 EnvironmentFile=-/etc/stellar-data-exporter/exporter.env
-ExecStart=/usr/bin/env /opt/stellar-data-exporter/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8787 --proxy-headers --forwarded-allow-ips=127.0.0.1
+ExecStart=/opt/stellar-data-exporter/.venv/bin/stellar-data-exporter --host 127.0.0.1 --port 8787 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=45s

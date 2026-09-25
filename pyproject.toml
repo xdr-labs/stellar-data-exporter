@@ -21,6 +21,9 @@ dependencies = [
 Repository = "https://github.com/xdr-labs/stellar-data-exporter"
 Issues = "https://github.com/xdr-labs/stellar-data-exporter/issues"
 
+[project.scripts]
+stellar-data-exporter = "app.cli:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8,<9",
