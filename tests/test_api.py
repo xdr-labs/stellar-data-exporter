@@ -404,3 +404,35 @@ def test_persistent_export_history_survives_memory_reset_without_secrets(monkeyp
     )
     assert b"api-token-must-not-persist" not in database_bytes
     assert b"query-secret-must-not-persist" not in database_bytes
+
+
+def test_user_scope_connection_accepts_api_key_without_email(monkeypatch):
+    captured = {}
+
+    async def user_scope_search(self, index, body):
+        captured["auth_mode"] = self.auth_mode
+        captured["email"] = self.email
+        captured["query_mode"] = self.query_mode
+        captured["index"] = index
+        return {"took": 3, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}}
+
+    monkeypatch.setattr(StellarClient, "search", user_scope_search)
+    response = TestClient(app).post(
+        "/api/connection/test",
+        json={
+            "host": "https://stellar.example.test",
+            "auth_mode": "user_scope",
+            "token": "user-api-key",
+            "verify_tls": True,
+            "sources": ["alerts"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert captured == {
+        "auth_mode": "user_scope",
+        "email": None,
+        "query_mode": "stellar_lucene",
+        "index": "aella-ser-*",
+    }

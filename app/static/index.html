@@ -39,19 +39,23 @@
       </div>
 
       <section class="card">
-        <div class="section-title"><span class="step">1</span><div><h2>Stellar Cyber</h2><p>Raw index queries require a Super Admin with root scope. Credentials are kept in process memory only.</p></div></div>
+        <div class="section-title"><span class="step">1</span><div><h2>Stellar Cyber</h2><p>Choose the credential type you were issued. Credentials stay in this session and are exchanged for a short-lived JWT.</p></div></div>
+        <div class="query-mode-grid" id="authModeGrid">
+          <label class="query-mode selected"><input type="radio" name="authMode" value="root_scope" checked /><span><b>Root Scope</b><small>Account email + All-Access Token.</small></span></label>
+          <label class="query-mode"><input type="radio" name="authMode" value="user_scope" /><span><b>User Scope</b><small>User API Key for raw-data query and export.</small></span></label>
+        </div>
         <div class="grid two">
           <label>Host
             <input id="host" type="url" placeholder="https://customer.stellarcyber.cloud" autocomplete="off" />
           </label>
-          <label>Account email
+          <label id="emailLabel">Account email
             <input id="email" type="email" placeholder="admin@example.com" autocomplete="off" />
           </label>
         </div>
-        <label>All-Access Token
-          <input id="token" type="password" placeholder="Generate Token from Stellar Cyber user settings" autocomplete="off" />
+        <label><span id="tokenLabel">All-Access Token</span>
+          <input id="token" type="password" placeholder="Enter Root Scope All-Access Token" autocomplete="off" />
         </label>
-        <p class="hint">The exporter exchanges this credential for a short-lived JWT and refreshes it automatically during long exports.</p>
+        <p class="hint" id="authHint">Root Scope uses account email + All-Access Token. JWT refresh is automatic during long exports.</p>
         <div class="row between">
           <label class="check advanced-only"><input id="verifyTls" type="checkbox" checked /> Verify TLS certificate</label>
           <span class="basic-only subtle-note">Secure TLS verification is enabled by default.</span>

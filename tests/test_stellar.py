@@ -77,3 +77,62 @@ async def test_stellar_client_refreshes_jwt_after_401():
     assert response["hits"]["total"]["value"] == 1
     assert token_calls == 2
     assert search_tokens == ["Bearer jwt-1", "Bearer jwt-2"]
+
+
+@pytest.mark.asyncio
+async def test_user_scope_api_key_uses_bearer_exchange_and_lucene_search_params():
+    calls = {"token": 0, "search": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/api/v1/access_token":
+            calls["token"] += 1
+            assert request.headers["Authorization"] == "Bearer user-api-key"
+            return httpx.Response(200, json={"access_token": "jwt-user"})
+
+        if request.url.path.endswith("/_search"):
+            calls["search"] += 1
+            assert request.headers["Authorization"] == "Bearer jwt-user"
+            assert request.url.params["size"] == "25"
+            assert request.url.params["track_total_hits"] == "true"
+            assert request.url.params["q"] == (
+                "(event_status:New) AND "
+                "timestamp:[1790294400000 TO 1790298000000}"
+            )
+            return httpx.Response(
+                200,
+                json={"hits": {"total": {"value": 2, "relation": "eq"}, "hits": []}},
+            )
+
+        raise AssertionError(f"Unexpected URL: {request.url}")
+
+    client = StellarClient(
+        "https://stellar.example.test",
+        None,
+        "user-api-key",
+        transport=httpx.MockTransport(handler),
+        auth_mode="user_scope",
+        query_mode="stellar_lucene",
+        stellar_query="event_status:New",
+    )
+    response = await client.search(
+        "aella-ser-*",
+        {
+            "size": 25,
+            "track_total_hits": True,
+            "query": {
+                "bool": {
+                    "filter": [{
+                        "range": {
+                            "timestamp": {
+                                "gte": "2026-09-25T00:00:00+00:00",
+                                "lt": "2026-09-25T01:00:00+00:00",
+                            }
+                        }
+                    }]
+                }
+            },
+        },
+    )
+
+    assert response["hits"]["total"]["value"] == 2
+    assert calls == {"token": 1, "search": 1}
