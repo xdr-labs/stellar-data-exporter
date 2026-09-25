@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import tarfile
+import zipfile
+from pathlib import Path
+
+
+SDIST_REQUIRED = {
+    ".engineering/project.yaml",
+    ".engineering/release.yaml",
+    ".engineering/tests.yaml",
+    "deploy/nginx/stellar-data-exporter.conf",
+    "deploy/systemd/stellar-data-exporter.service",
+    "docs/PRODUCTION.md",
+    "scripts/backup-state.sh",
+    "scripts/restore-test.sh",
+    "schemas/runtime-contract.schema.json",
+    "tools/runtime-contract.py",
+}
+
+WHEEL_REQUIRED = {
+    "app/static/app.js",
+    "app/static/index.html",
+    "app/static/stellar-cyber-logo.svg",
+    "app/static/styles.css",
+}
+
+
+def normalized_sdist_names(archive: Path) -> set[str]:
+    with tarfile.open(archive, "r:gz") as bundle:
+        return {
+            name.split("/", 1)[1]
+            for name in bundle.getnames()
+            if "/" in name
+        }
+
+
+def wheel_contents(archive: Path) -> tuple[set[str], str]:
+    with zipfile.ZipFile(archive) as bundle:
+        names = set(bundle.namelist())
+        metadata = next(name for name in names if name.endswith(".dist-info/METADATA"))
+        return names, bundle.read(metadata).decode("utf-8")
+
+
+def require_all(actual: set[str], required: set[str], label: str) -> None:
+    missing = sorted(required - actual)
+    if missing:
+        raise SystemExit(f"{label} missing: {', '.join(missing)}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("dist_dir", type=Path)
+    args = parser.parse_args()
+
+    sdists = sorted(args.dist_dir.glob("*.tar.gz"))
+    wheels = sorted(args.dist_dir.glob("*.whl"))
+    if len(sdists) != 1 or len(wheels) != 1:
+        raise SystemExit("expected exactly one sdist and one wheel")
+
+    require_all(normalized_sdist_names(sdists[0]), SDIST_REQUIRED, "sdist")
+    wheel_names, metadata = wheel_contents(wheels[0])
+    require_all(wheel_names, WHEEL_REQUIRED, "wheel")
+
+    for value in (
+        "Project-URL: Repository, https://github.com/xdr-labs/stellar-data-exporter",
+        "Project-URL: Issues, https://github.com/xdr-labs/stellar-data-exporter/issues",
+        "Description-Content-Type: text/markdown",
+    ):
+        if value not in metadata:
+            raise SystemExit(f"wheel metadata missing: {value}")
+
+    print("RELEASE_ARTIFACTS=PASS")
+
+
+if __name__ == "__main__":
+    main()
