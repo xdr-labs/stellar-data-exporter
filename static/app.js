@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   previewTotal: null,
   estimatedBytes: null,
+  sourceCatalog: [],
 };
 
 function isoFromLocal(value) {
@@ -61,6 +62,65 @@ function selectedDestinationType() {
   return document.querySelector('input[name="destination"]:checked')?.value || "download";
 }
 
+function selectedSources() {
+  return [...document.querySelectorAll('input[name="source"]:checked')].map((el) => el.value);
+}
+
+function selectedSourceLabels() {
+  const selected = new Set(selectedSources());
+  return state.sourceCatalog.filter((item) => selected.has(item.id)).map((item) => item.label);
+}
+
+function selectedSourceIndices() {
+  const selected = new Set(selectedSources());
+  return state.sourceCatalog.filter((item) => selected.has(item.id)).map((item) => item.index);
+}
+
+function buildEffectiveQuery() {
+  const raw = parseQuery();
+  const start = isoFromLocal($("startTime").value);
+  const end = isoFromLocal($("endTime").value);
+  const timeField = $("timeField").value.trim() || "timestamp";
+  if (!start || !end) throw new Error("Choose start and end time to build the effective DSL.");
+  if (new Date(end) <= new Date(start)) throw new Error("End time must be later than start time.");
+
+  const body = JSON.parse(JSON.stringify(raw));
+  delete body.aggs;
+  delete body.aggregations;
+  delete body.collapse;
+  delete body.from;
+  delete body.search_after;
+
+  const originalQuery = body.query || {match_all: {}};
+  body.query = {
+    bool: {
+      must: [originalQuery],
+      filter: [
+        {
+          range: {
+            [timeField]: {
+              gte: start,
+              lt: end,
+            },
+          },
+        },
+      ],
+    },
+  };
+  return body;
+}
+
+function renderEffectiveRequest() {
+  const indices = selectedSourceIndices();
+  $("requestPath").textContent = `/connect/api/data/${indices.length ? indices.join(",") : "{select-data-source}"}/_search`;
+
+  try {
+    $("effectiveDsl").value = JSON.stringify(buildEffectiveQuery(), null, 2);
+  } catch (error) {
+    $("effectiveDsl").value = `Effective DSL unavailable: ${error.message}`;
+  }
+}
+
 function basePayload() {
   const start = isoFromLocal($("startTime").value);
   const end = isoFromLocal($("endTime").value);
@@ -69,14 +129,15 @@ function basePayload() {
   if (!$("host").value.trim()) throw new Error("Stellar Cyber host is required.");
   if (!$("email").value.trim()) throw new Error("Stellar Cyber account email is required.");
   if (!$("token").value.trim()) throw new Error("All-Access Token is required.");
-  if (!$("indexName").value.trim()) throw new Error("Index is required.");
+  const sources = selectedSources();
+  if (!sources.length) throw new Error("Select at least one data source.");
 
   return {
     host: $("host").value.trim(),
     email: $("email").value.trim(),
     token: $("token").value.trim(),
     verify_tls: $("verifyTls").checked,
-    index: $("indexName").value.trim(),
+    sources,
     time_field: $("timeField").value.trim() || "timestamp",
     start,
     end,
@@ -146,14 +207,45 @@ function setBusy(button, busy, busyText) {
   }
 }
 
+function apiErrorMessage(body, status) {
+  const detail = body?.detail ?? body?.message ?? body;
+  if (typeof detail === "string" && detail.trim()) return detail;
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") return item.msg || item.message || item.detail;
+        return null;
+      })
+      .filter(Boolean);
+    if (messages.length) return messages.join(" ");
+  }
+
+  if (detail && typeof detail === "object") {
+    const message = detail.msg || detail.message || detail.error || detail.detail;
+    if (typeof message === "string") return message;
+  }
+
+  if (status === 401) return "Authentication failed. Check the account email and All-Access Token.";
+  if (status === 403) return "Connected, but the account does not have permission to query the selected data sources.";
+  if (status >= 500) return "Connection failed. Check the host address, network path, and TLS settings.";
+  return `Request failed (HTTP ${status}).`;
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: {"Content-Type": "application/json", ...(options.headers || {})},
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      headers: {"Content-Type": "application/json", ...(options.headers || {})},
+      ...options,
+    });
+  } catch (error) {
+    throw new Error("The exporter service could not be reached. Check the server connection.");
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body.detail || `HTTP ${response.status}`);
+    throw new Error(apiErrorMessage(body, response.status));
   }
   return body;
 }
@@ -210,7 +302,9 @@ function updateSftpAuthUI() {
 function updateSummary() {
   const host = $("host").value.trim();
   $("summaryHost").textContent = host ? host.replace(/^https?:\/\//, "") : "Not set";
-  $("summaryIndex").textContent = $("indexName").value.trim() || "—";
+  const labels = selectedSourceLabels();
+  $("summarySources").textContent = labels.length ? labels.join(", ") : "None";
+  $("selectedSourceCount").textContent = `${labels.length} source${labels.length === 1 ? "" : "s"}`;
 
   const start = $("startTime").value;
   const end = $("endTime").value;
@@ -224,6 +318,7 @@ function updateSummary() {
     el.classList.toggle("selected", !!radio?.checked);
   });
   updateDestinationUI();
+  renderEffectiveRequest();
 }
 
 async function testConnection() {
@@ -232,6 +327,8 @@ async function testConnection() {
     if (!$("host").value.trim() || !$("email").value.trim() || !$("token").value.trim()) {
       throw new Error("Host, account email, and All-Access Token are required.");
     }
+    const sources = selectedSources();
+    if (!sources.length) throw new Error("Select at least one data source.");
     setBusy(button, true, "Testing…");
     setStatus("connectionStatus", "Testing connection…");
     const result = await api("/api/connection/test", {
@@ -241,10 +338,11 @@ async function testConnection() {
         email: $("email").value.trim(),
         token: $("token").value.trim(),
         verify_tls: $("verifyTls").checked,
-        test_index: $("indexName").value.trim() || "aella-ser-*",
+        sources,
       }),
     });
-    setStatus("connectionStatus", `Connected. ${result.index} responded${result.took_ms != null ? ` in ${result.took_ms} ms` : ""}.`, "success");
+    const names = result.sources?.join(", ") || `${sources.length} selected source(s)`;
+    setStatus("connectionStatus", `Connected. Access confirmed for: ${names}${result.took_ms != null ? ` (${result.took_ms} ms)` : ""}.`, "success");
   } catch (error) {
     setStatus("connectionStatus", error.message, "error");
   } finally {
@@ -359,6 +457,43 @@ async function runExport() {
   }
 }
 
+function renderSources(items) {
+  const grid = $("sourceGrid");
+  grid.innerHTML = items.map((item, index) => {
+    const checked = item.id === "alerts" ? "checked" : "";
+    return `<label class="source-option ${checked ? "selected" : ""}">
+      <input type="checkbox" name="source" value="${escapeHtml(item.id)}" ${checked} />
+      <span><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.description)}</small></span>
+    </label>`;
+  }).join("");
+
+  grid.querySelectorAll('input[name="source"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      input.closest(".source-option")?.classList.toggle("selected", input.checked);
+      updateSummary();
+    });
+  });
+  updateSummary();
+}
+
+async function loadDataSources() {
+  try {
+    const items = await api("/api/data-sources");
+    state.sourceCatalog = items;
+    renderSources(items);
+  } catch (error) {
+    $("sourceGrid").innerHTML = `<div class="status error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function setAllSources(checked) {
+  document.querySelectorAll('input[name="source"]').forEach((input) => {
+    input.checked = checked;
+    input.closest(".source-option")?.classList.toggle("selected", checked);
+  });
+  updateSummary();
+}
+
 function initialize() {
   const now = new Date();
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -371,6 +506,8 @@ function initialize() {
   $("validateQuery").addEventListener("click", validateQuery);
   $("previewQuery").addEventListener("click", previewQuery);
   $("runExport").addEventListener("click", runExport);
+  $("selectAllSources").addEventListener("click", () => setAllSources(true));
+  $("clearSources").addEventListener("click", () => setAllSources(false));
   $("sftpAuthMethod").addEventListener("change", updateSftpAuthUI);
 
   document.querySelectorAll("input,textarea,select").forEach((el) => {
@@ -384,6 +521,7 @@ function initialize() {
 
   updateSftpAuthUI();
   updateSummary();
+  loadDataSources();
 }
 
 initialize();

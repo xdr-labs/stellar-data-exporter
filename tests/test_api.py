@@ -33,7 +33,7 @@ def payload():
         "email": "admin@example.test",
         "token": "test-token",
         "verify_tls": True,
-        "index": "aella-ser-*",
+        "sources": ["alerts"],
         "time_field": "timestamp",
         "start": start.isoformat(),
         "end": end.isoformat(),

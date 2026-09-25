@@ -23,7 +23,14 @@ from .models import (
     SFTPDestination,
 )
 from .query import build_document_query, hit_source, total_hits
-from .stellar import StellarAPIError, StellarClient
+from .sources import resolve_indices, source_catalog, source_labels
+from .stellar import (
+    StellarAPIError,
+    StellarAuthError,
+    StellarConnectionError,
+    StellarPermissionError,
+    StellarClient,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -83,7 +90,7 @@ def build_output(payload: ExportInput):
     client = client_for(payload)
     engine = ExportEngine(
         client,
-        index=payload.index,
+        index=resolve_indices(payload.sources),
         raw_query=payload.query,
         time_field=payload.time_field,
         start=payload.start,
@@ -166,19 +173,44 @@ async def styles_css() -> FileResponse:
     return FileResponse(STATIC_DIR / "styles.css", media_type="text/css")
 
 
+@app.get("/stellar-cyber-logo.svg")
+async def stellar_cyber_logo() -> FileResponse:
+    return FileResponse(STATIC_DIR / "stellar-cyber-logo.svg", media_type="image/svg+xml")
+
+
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "stellar-data-exporter"}
 
 
+@app.get("/api/data-sources")
+async def data_sources() -> list[dict[str, str]]:
+    return source_catalog()
+
+
+def stellar_http_error(exc: StellarAPIError) -> HTTPException:
+    if isinstance(exc, StellarAuthError):
+        return HTTPException(status_code=401, detail=str(exc))
+    if isinstance(exc, StellarPermissionError):
+        return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, StellarConnectionError):
+        return HTTPException(status_code=502, detail=str(exc))
+    return HTTPException(status_code=502, detail=str(exc))
+
+
 @app.post("/api/connection/test")
 async def test_connection(payload: ConnectionInput) -> dict[str, Any]:
     body = {"size": 0, "track_total_hits": False, "query": {"match_all": {}}}
+    indices = resolve_indices(payload.sources)
     try:
-        response = await client_for(payload).search(payload.test_index, body)
+        response = await client_for(payload).search(indices, body)
     except StellarAPIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"ok": True, "index": payload.test_index, "took_ms": response.get("took")}
+        raise stellar_http_error(exc) from exc
+    return {
+        "ok": True,
+        "sources": source_labels(payload.sources),
+        "took_ms": response.get("took"),
+    }
 
 
 @app.post("/api/destination/test")
@@ -207,20 +239,21 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
         size=payload.preview_limit,
         track_total_hits=True,
     )
+    indices = resolve_indices(payload.sources)
     try:
-        response = await client_for(payload).search(payload.index, body)
+        response = await client_for(payload).search(indices, body)
     except StellarAPIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise stellar_http_error(exc) from exc
 
     total, exact = total_hits(response)
     rows = [hit_source(hit) for hit in response.get("hits", {}).get("hits", [])]
     sample_bytes = sum(len(str(row).encode("utf-8")) for row in rows)
     estimated_bytes = int((sample_bytes / max(len(rows), 1)) * total) if rows else 0
     warnings = []
-    if payload.index.endswith("-*") and (payload.end - payload.start).total_seconds() > 86400:
+    if (payload.end - payload.start).total_seconds() > 86400:
         warnings.append(
-            "Open wildcard index over more than 24 hours may scan many historical shards. "
-            "Prefer a date-scoped/date-math index expression when the index family supports it."
+            "A range longer than 24 hours can scan many historical shards across the selected data sources. "
+            "Use the shortest practical time range for large exports."
         )
 
     return {

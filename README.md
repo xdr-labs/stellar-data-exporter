@@ -10,8 +10,10 @@ The first working slice is intentionally small:
 - Stellar Cyber host + account email + root-scope All-Access Token supplied per browser session
 - automatic exchange of the All-Access Token for a short-lived JWT
 - automatic JWT refresh before expiry and one retry after HTTP 401
-- user-supplied Elasticsearch DSL
-- explicit start/end time range
+- user-friendly multi-select data sources mapped internally to Stellar Cyber indices
+- user-supplied query conditions plus a live effective Elasticsearch request/DSL preview
+- explicit start/end time range reflected immediately in the effective DSL
+- readable connection/authentication/permission errors
 - query validation and 100-record preview
 - adaptive time slicing for large ranges
 - streamed CSV or JSON output

@@ -3,13 +3,18 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
+from .sources import DataSourceId
+
 
 class ConnectionInput(BaseModel):
     host: HttpUrl
     email: str = Field(min_length=3)
     token: str = Field(min_length=1)
     verify_tls: bool = True
-    test_index: str = "aella-ser-*"
+    sources: list[DataSourceId] = Field(
+        default_factory=lambda: [DataSourceId.ALERTS],
+        min_length=1,
+    )
 
 
 class QueryInput(BaseModel):
@@ -17,7 +22,7 @@ class QueryInput(BaseModel):
     email: str = Field(min_length=3)
     token: str = Field(min_length=1)
     verify_tls: bool = True
-    index: str = Field(min_length=1)
+    sources: list[DataSourceId] = Field(min_length=1)
     time_field: str = Field(default="timestamp", min_length=1)
     start: datetime
     end: datetime

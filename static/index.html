@@ -3,21 +3,32 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Stellar Data Exporter</title>
+  <title>Stellar Cyber Data Exporter</title>
+  <meta name="theme-color" content="#231F20" />
+  <link rel="icon" href="/stellar-cyber-logo.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">S</span><span>Stellar Data Exporter</span></div>
-    <div class="top-actions"><span class="pill">No login · credentials stay in memory</span></div>
+    <div class="brand">
+      <img class="stellar-logo" src="/stellar-cyber-logo.svg" alt="Stellar Cyber" />
+      <span class="brand-divider"></span>
+      <div class="product-name">
+        <strong>Data Exporter</strong>
+        <small>Query &amp; Export Utility</small>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span class="secure-badge"><span class="secure-dot"></span> Session-only credentials</span>
+    </div>
   </header>
 
   <main class="layout">
     <section class="content">
       <div class="hero">
         <div>
-          <p class="eyebrow">STELLAR CYBER QUERY EXPORT</p>
-          <h1>Query once. Export safely in chunks.</h1>
+          <p class="eyebrow">STELLAR CYBER · DATA EXPORT</p>
+          <h1>Query once. Export safely at scale.</h1>
           <p>Provide your Stellar host, root-scope All-Access Token, Elasticsearch DSL and time range. Large ranges are sliced automatically.</p>
         </div>
         <div class="health" id="serviceHealth"><span class="dot"></span> service ready</div>
@@ -46,13 +57,27 @@
 
       <section class="card">
         <div class="section-title"><span class="step">2</span><div><h2>Query</h2><p>Paste a query you wrote yourself or generated with any AI tool.</p></div></div>
-        <div class="grid query-grid">
-          <label>Index
-            <input id="indexName" value="aella-ser-*" spellcheck="false" />
-          </label>
+        <div class="source-header">
+          <div>
+            <label>Data sources</label>
+            <p class="hint">Select one or more Stellar Cyber data types. Internal index names are mapped automatically.</p>
+          </div>
+          <div class="row">
+            <button id="selectAllSources" class="button secondary small" type="button">Select all</button>
+            <button id="clearSources" class="button secondary small" type="button">Clear</button>
+          </div>
+        </div>
+        <div id="sourceGrid" class="source-grid">
+          <div class="muted">Loading data sources…</div>
+        </div>
+        <div class="grid two">
           <label>Time field
             <input id="timeField" value="timestamp" spellcheck="false" />
           </label>
+          <div class="selected-source-count">
+            <span>Selected</span>
+            <strong id="selectedSourceCount">0 sources</strong>
+          </div>
         </div>
         <div class="grid two">
           <label>Start
@@ -62,13 +87,23 @@
             <input id="endTime" type="datetime-local" step="1" />
           </label>
         </div>
-        <label>Elasticsearch DSL
+        <label>Elasticsearch request
+          <div class="request-target">
+            <span>GET</span>
+            <code id="requestPath">/connect/api/data/{select-data-source}/_search</code>
+          </div>
+        </label>
+        <label>Query conditions
           <textarea id="queryDsl" spellcheck="false">{
   "query": {
     "match_all": {}
   }
 }</textarea>
         </label>
+        <label>Effective Elasticsearch DSL
+          <textarea id="effectiveDsl" class="effective-area" spellcheck="false" readonly></textarea>
+        </label>
+        <p class="hint">Selected data sources update the request path immediately. Start/end time and the time field are injected into the effective DSL automatically while your query conditions remain unchanged.</p>
         <div class="row between wrap">
           <div id="queryStatus" class="status compact">Ready to validate.</div>
           <div class="row">
@@ -195,7 +230,7 @@
     <aside class="summary-card">
       <p class="eyebrow">EXPORT SUMMARY</p>
       <div class="summary-row"><span>Source</span><strong id="summaryHost">Not set</strong></div>
-      <div class="summary-row"><span>Index</span><strong id="summaryIndex">aella-ser-*</strong></div>
+      <div class="summary-row"><span>Data sources</span><strong id="summarySources">Alerts</strong></div>
       <div class="summary-row"><span>Range</span><strong id="summaryRange">—</strong></div>
       <div class="summary-row"><span>Matched</span><strong id="summaryRecords">Preview required</strong></div>
       <div class="summary-row"><span>Output</span><strong id="summaryOutput">CSV · gzip</strong></div>

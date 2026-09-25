@@ -15,6 +15,18 @@ class StellarAPIError(RuntimeError):
     pass
 
 
+class StellarAuthError(StellarAPIError):
+    pass
+
+
+class StellarPermissionError(StellarAPIError):
+    pass
+
+
+class StellarConnectionError(StellarAPIError):
+    pass
+
+
 class StellarClient:
     def __init__(
         self,
@@ -41,37 +53,43 @@ class StellarClient:
     ) -> str:
         async with self._jwt_lock:
             age = time.monotonic() - self._jwt_obtained_at
-            if (
-                not force_refresh
-                and self._jwt
-                and age < JWT_REFRESH_AGE_SECONDS
-            ):
+            if not force_refresh and self._jwt and age < JWT_REFRESH_AGE_SECONDS:
                 return self._jwt
 
             url = f"{self.host}/connect/api/v1/access_token"
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            response = await client.post(
-                url,
-                headers=headers,
-                auth=httpx.BasicAuth(self.email, self.token),
-            )
+            try:
+                response = await client.post(
+                    url,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    auth=httpx.BasicAuth(self.email, self.token),
+                )
+            except httpx.RequestError as exc:
+                raise StellarConnectionError(
+                    "Cannot reach the Stellar Cyber host. Check the host address, DNS/network path, port, and TLS settings."
+                ) from exc
+
+            if response.status_code == 401:
+                raise StellarAuthError(
+                    "Authentication failed. Check the account email and All-Access Token."
+                )
+            if response.status_code == 403:
+                raise StellarPermissionError(
+                    "Authentication was rejected by policy. Verify the account is a root-scope Super Admin with an All-Access Token."
+                )
             if response.status_code >= 400:
-                detail = response.text[:1200]
                 raise StellarAPIError(
-                    "Failed to obtain Stellar Cyber access token "
-                    f"(HTTP {response.status_code}): {detail}"
+                    f"Stellar Cyber access-token request failed with HTTP {response.status_code}."
                 )
 
             try:
-                payload = response.json()
-                access_token = payload["access_token"]
+                access_token = response.json()["access_token"]
             except (ValueError, KeyError, TypeError) as exc:
                 raise StellarAPIError(
-                    "Stellar Cyber access_token response did not contain access_token"
+                    "Stellar Cyber returned an invalid access-token response."
                 ) from exc
 
             if not isinstance(access_token, str) or not access_token:
-                raise StellarAPIError("Stellar Cyber returned an empty access token")
+                raise StellarAPIError("Stellar Cyber returned an empty access token.")
 
             self._jwt = access_token
             self._jwt_obtained_at = time.monotonic()
@@ -82,37 +100,53 @@ class StellarClient:
         url = f"{self.host}/connect/api/data/{encoded_index}/_search"
         timeout = httpx.Timeout(60.0, connect=15.0)
 
-        async with httpx.AsyncClient(
-            verify=self.verify_tls,
-            timeout=timeout,
-            transport=self.transport,
-        ) as client:
-            for attempt in range(2):
-                jwt = await self._get_access_token(
-                    client,
-                    force_refresh=attempt == 1,
-                )
-                headers = {
-                    "Authorization": f"Bearer {jwt}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                }
-                response = await client.request(
-                    "GET",
-                    url,
-                    headers=headers,
-                    json=body,
-                )
-                if response.status_code != 401 or attempt == 1:
-                    break
+        try:
+            async with httpx.AsyncClient(
+                verify=self.verify_tls,
+                timeout=timeout,
+                transport=self.transport,
+            ) as client:
+                for attempt in range(2):
+                    jwt = await self._get_access_token(
+                        client,
+                        force_refresh=attempt == 1,
+                    )
+                    response = await client.request(
+                        "GET",
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {jwt}",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                        },
+                        json=body,
+                    )
+                    if response.status_code != 401 or attempt == 1:
+                        break
+        except httpx.RequestError as exc:
+            raise StellarConnectionError(
+                "Connection to Stellar Cyber failed while querying data. Check the host, network path, and TLS settings."
+            ) from exc
 
-        if response.status_code >= 400:
-            detail = response.text[:1200]
+        if response.status_code == 401:
+            raise StellarAuthError(
+                "Stellar Cyber rejected the session token. Recheck the account email and All-Access Token."
+            )
+        if response.status_code == 403:
+            raise StellarPermissionError(
+                "Connected, but this account does not have permission to query raw data. Root-scope Super Admin access is required."
+            )
+        if response.status_code == 404:
             raise StellarAPIError(
-                f"Stellar Cyber API returned HTTP {response.status_code}: {detail}"
+                "The Stellar data API or one of the selected data sources was not found."
+            )
+        if response.status_code >= 400:
+            detail = response.text[:500]
+            raise StellarAPIError(
+                f"Stellar Cyber query failed with HTTP {response.status_code}: {detail}"
             )
 
         try:
             return response.json()
         except ValueError as exc:
-            raise StellarAPIError("Stellar Cyber API did not return JSON") from exc
+            raise StellarAPIError("Stellar Cyber did not return valid JSON.") from exc
