@@ -51,4 +51,5 @@ scenarios:
       - "remote split-export checkpoints persist completed part hashes and resume skips only regenerated parts that exactly match saved checkpoints"
       - "stable document identities are deduplicated without source-hash fallback, and reject-overlap blocks only intersecting matching export pipelines while allowing adjacent ranges"
       - "scheduled export payloads remain encrypted at rest, use remote destinations only, persist across restart, and advance contiguous windows only after successful runs"
+      - "production service binds Uvicorn to loopback only and deployment templates require TLS, authentication, API rate limiting, restrictive systemd sandboxing, and protected persistent state"
     release_gate: true

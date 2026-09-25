@@ -122,6 +122,18 @@ The development certificate includes SAN entries for `dev-atlas`, `localhost`,
 trust the certificate will show a certificate warning. For an Internet-facing deployment,
 replace it with a certificate issued for the production DNS name by a trusted CA.
 
+## Production deployment
+
+Production deployment is intentionally different from the development HTTPS listener: Uvicorn binds only to `127.0.0.1:8787`, while Nginx provides public TLS, Basic Auth, security headers, and API rate limiting. Hardened systemd/Nginx templates are under `deploy/`, with the complete install, backup, upgrade, and incident runbook in `docs/PRODUCTION.md`.
+
+Validate the bundled service unit before deployment:
+
+```bash
+systemd-analyze verify deploy/systemd/stellar-data-exporter.service
+```
+
+Do not expose Uvicorn port 8787 directly on an Internet-reachable interface.
+
 ## Tests
 
 ```bash
@@ -138,4 +150,4 @@ P2 operationalization, after one-shot export is stable:
 2. checkpoint/resume and retry-from-checkpoint for remote destinations — implemented at durable split-part boundaries; non-split retries from the beginning
 3. overlap/dedup strategy for resumed or scheduled exports — implemented with half-open ranges, stable document-identity dedup, and explicit allow/reject overlap policy
 4. optional scheduled exports with encrypted credential persistence — implemented for S3/SFTP with protected payload storage, contiguous windows, manual Run now, Pause/Enable, Delete, and restart persistence
-5. production hardening: reverse proxy, access boundary, rate limits, deployment/runbook
+5. production hardening — implemented with loopback-only Uvicorn, Nginx TLS + Basic Auth + per-client API rate limiting, hardened systemd sandboxing, persistent-state guidance, and `docs/PRODUCTION.md` operations runbook
