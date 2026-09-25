@@ -100,6 +100,7 @@ class ExportEngine:
         end: datetime,
         target_records: int,
         minimum_slice_ms: int,
+        max_records: int | None = None,
     ):
         self.client = client
         self.index = index
@@ -109,6 +110,7 @@ class ExportEngine:
         self.end = end
         self.target_records = target_records
         self.minimum_slice = timedelta(milliseconds=minimum_slice_ms)
+        self.max_records = max_records
 
     async def _count(self, start: datetime, end: datetime) -> int:
         body = build_document_query(
@@ -143,6 +145,7 @@ class ExportEngine:
 
     async def iter_documents(self) -> AsyncIterator[dict[str, Any]]:
         stack: list[tuple[datetime, datetime]] = [(self.start, self.end)]
+        emitted = 0
         while stack:
             start, end = stack.pop()
             count = await self._count(start, end)
@@ -173,6 +176,9 @@ class ExportEngine:
                 continue
 
             for record in records:
+                if self.max_records is not None and emitted >= self.max_records:
+                    return
+                emitted += 1
                 yield record
 
 

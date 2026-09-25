@@ -81,3 +81,7 @@ details{border-top:1px solid #e5e1e2;padding-top:13px}summary{cursor:pointer;fon
 .field-row{display:grid;grid-template-columns:28px minmax(0,1fr) 46px 32px 32px;align-items:center;gap:7px;padding:7px 9px;border-bottom:1px solid #f0ecee}.field-row:last-child{border-bottom:0}.field-row input{width:auto}.field-row code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.field-order{font-size:10px;color:var(--muted);text-align:center}.field-move{border:1px solid #ddd7d9;background:#fff;border-radius:6px;height:26px;cursor:pointer}.field-move:disabled{opacity:.3;cursor:not-allowed}
 .field-empty{padding:14px;color:var(--muted);font-size:11px}
 @media(max-width:650px){.field-toolbar{grid-template-columns:1fr 1fr 1fr}.field-toolbar input{grid-column:1/-1}.field-row{grid-template-columns:28px minmax(0,1fr) 38px 30px 30px}}
+
+.record-limit-panel{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin:-2px 0 16px;padding:11px 12px;border:1px solid #e6e1e3;border-radius:9px;background:#faf9f9}
+.record-limit-title{font-size:11px;font-weight:850;color:#4d474b;text-transform:uppercase;letter-spacing:.04em}.record-limit-choice{gap:7px}.record-limit-input{width:120px;padding:7px 9px}.record-limit-input:disabled{background:#f0edef;color:#8a8588}
+@media(max-width:650px){.record-limit-panel{align-items:flex-start;flex-direction:column;gap:9px}.record-limit-choice{width:100%}.record-limit-input{flex:1}}

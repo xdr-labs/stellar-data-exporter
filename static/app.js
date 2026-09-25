@@ -107,6 +107,21 @@ function splitSizeBytes() {
   return Math.round(value * multiplier);
 }
 
+function recordLimitValue() {
+  const mode = document.querySelector('input[name="exportRecords"]:checked')?.value || "all";
+  if (mode === "all") return null;
+  const value = Number($("recordLimit").value);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error("Export record limit must be a positive whole number.");
+  }
+  return value;
+}
+
+function updateRecordLimitUI() {
+  const limited = document.querySelector('input[name="exportRecords"]:checked')?.value === "limit";
+  $("recordLimit").disabled = !limited;
+}
+
 function outputFilename() {
   const format = document.querySelector('input[name="format"]:checked')?.value || "csv";
   const compressed = $("compress").checked;
@@ -707,6 +722,7 @@ async function runExport() {
     const payload = {
       ...basePayload(),
       selected_fields: state.previewFields.length ? [...state.selectedFields] : null,
+      record_limit: recordLimitValue(),
       format: document.querySelector('input[name="format"]:checked')?.value || "csv",
       compress: $("compress").checked,
       filename: $("filename").value.trim() || "stellar-export",
@@ -788,6 +804,9 @@ function initialize() {
   $("previewQuery").addEventListener("click", previewQuery);
   $("runExport").addEventListener("click", runExport);
   $("splitFiles").addEventListener("change", updateSplitUI);
+  document.querySelectorAll('input[name="exportRecords"]').forEach((radio) => {
+    radio.addEventListener("change", updateRecordLimitUI);
+  });
   $("selectAllSources").addEventListener("click", () => setAllSources(true));
   $("clearSources").addEventListener("click", () => setAllSources(false));
   $("fieldSearch").addEventListener("input", renderFieldSelector);
@@ -826,6 +845,7 @@ function initialize() {
   });
 
   updateSftpAuthUI();
+  updateRecordLimitUI();
   updateQueryModeUI();
   updateSummary();
   loadDataSources();

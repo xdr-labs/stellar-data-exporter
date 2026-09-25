@@ -180,6 +180,15 @@
           <label class="choice selected"><input type="radio" name="format" value="csv" checked /><span><b>CSV</b><small>Nested objects flatten to dot notation.</small></span></label>
           <label class="choice"><input type="radio" name="format" value="json" /><span><b>JSON</b><small>Streams a valid JSON array.</small></span></label>
         </div>
+        <div class="record-limit-panel">
+          <span class="record-limit-title">Export records</span>
+          <label class="check"><input type="radio" name="exportRecords" value="all" checked /> All matching records</label>
+          <label class="check record-limit-choice">
+            <input type="radio" name="exportRecords" value="limit" />
+            Limit to
+            <input id="recordLimit" class="record-limit-input" type="number" min="1" step="1" value="100000" disabled />
+          </label>
+        </div>
         <div class="grid two">
           <label>Filename
             <input id="filename" value="stellar-export" />

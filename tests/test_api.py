@@ -245,3 +245,23 @@ def test_selected_fields_json_preserves_nested_shape(monkeypatch):
     assert download.json() == [
         {"metadata": {"geo": {"country": "KR"}}, "srcip": "10.0.0.1"}
     ]
+
+
+def test_record_limit_stops_download_at_exact_n(monkeypatch):
+    monkeypatch.setattr(StellarClient, "search", fake_search)
+    client = TestClient(app)
+    request = {
+        **payload(),
+        "format": "json",
+        "compress": False,
+        "filename": "limited",
+        "record_limit": 1,
+    }
+
+    job = client.post("/api/export/jobs", json=request)
+    assert job.status_code == 200
+    download = client.get(job.json()["download_url"])
+    assert download.status_code == 200
+    rows = download.json()
+    assert len(rows) == 1
+    assert rows[0]["srcip"] == "10.0.0.1"

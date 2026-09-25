@@ -43,3 +43,24 @@ async def test_engine_splits_large_time_ranges_until_under_target():
     fetch_sizes = [size for _, _, size in client.calls if size > 0]
     assert fetch_sizes
     assert all(size == 5 for size in fetch_sizes)
+
+
+@pytest.mark.asyncio
+async def test_engine_stops_exactly_at_global_record_limit():
+    client = FakeClient()
+    engine = ExportEngine(
+        client,
+        index="aella-ser-*",
+        raw_query={"query": {"match_all": {}}},
+        time_field="timestamp",
+        start=datetime(2026, 9, 1, 0, 0, tzinfo=UTC),
+        end=datetime(2026, 9, 1, 0, 0, 10, tzinfo=UTC),
+        target_records=5,
+        minimum_slice_ms=1,
+        max_records=7,
+    )
+
+    records = [record async for record in engine.iter_documents()]
+    assert len(records) == 7
+    fetch_sizes = [size for _, _, size in client.calls if size > 0]
+    assert len(fetch_sizes) == 2

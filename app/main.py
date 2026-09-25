@@ -120,6 +120,7 @@ def build_export_source(payload: ExportInput):
         end=payload.end,
         target_records=payload.target_records_per_slice,
         minimum_slice_ms=payload.minimum_slice_ms,
+        max_records=payload.record_limit,
     )
 
     preferred_fields = None

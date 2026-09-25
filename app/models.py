@@ -115,6 +115,7 @@ class ExportInput(QueryInput):
     filename: str | None = None
     max_file_size_bytes: int | None = Field(default=None, ge=256)
     selected_fields: list[str] | None = Field(default=None, min_length=1)
+    record_limit: int | None = Field(default=None, ge=1)
     destination: Destination = Field(default_factory=DownloadDestination)
 
     @field_validator("selected_fields")
