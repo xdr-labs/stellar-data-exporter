@@ -1,4 +1,5 @@
 from pathlib import Path
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,15 @@ def test_nginx_enforces_tls_auth_rate_limit_and_loopback_proxy():
     assert 'add_header Strict-Transport-Security "max-age=31536000" always;' in site
     assert 'add_header X-Frame-Options "DENY" always;' in site
     assert "proxy_buffering off;" in site
+
+
+def test_web_assets_are_packaged_with_the_application():
+    config = tomllib.loads(read("pyproject.toml"))
+    package_data = config["tool"]["setuptools"]["package-data"]
+
+    assert "static/*" in package_data["app"]
+    for filename in ("index.html", "app.js", "styles.css", "stellar-cyber-logo.svg"):
+        assert (ROOT / "app" / "static" / filename).is_file()
 
 
 def test_production_runbook_preserves_encryption_key_and_private_backend():

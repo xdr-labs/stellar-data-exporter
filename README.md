@@ -133,7 +133,7 @@ Do not expose Uvicorn port 8787 directly on an Internet-reachable interface.
 
 ```bash
 uv run --extra dev pytest -q
-node --check static/app.js
+node --check app/static/app.js
 ```
 
 ## Roadmap status
