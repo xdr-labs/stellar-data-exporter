@@ -65,8 +65,9 @@ from .stellar import (
 )
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-STATIC_DIR = BASE_DIR / "static"
+PACKAGE_DIR = Path(__file__).resolve().parent
+BASE_DIR = PACKAGE_DIR.parent
+STATIC_DIR = PACKAGE_DIR / "static"
 DOWNLOAD_JOB_TTL_SECONDS = 600
 HISTORY_JOB_TTL_SECONDS = 3600
 JOB_DB_PATH = Path(os.environ.get("STELLAR_EXPORTER_JOB_DB", str(BASE_DIR / ".data" / "export-jobs.sqlite3")))

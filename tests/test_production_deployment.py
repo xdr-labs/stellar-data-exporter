@@ -1,4 +1,7 @@
 from pathlib import Path
+import sqlite3
+import subprocess
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +50,43 @@ def test_nginx_enforces_tls_auth_rate_limit_and_loopback_proxy():
     assert 'add_header Strict-Transport-Security "max-age=31536000" always;' in site
     assert 'add_header X-Frame-Options "DENY" always;' in site
     assert "proxy_buffering off;" in site
+
+
+def test_web_assets_are_packaged_with_the_application():
+    config = tomllib.loads(read("pyproject.toml"))
+    package_data = config["tool"]["setuptools"]["package-data"]
+
+    assert "static/*" in package_data["app"]
+    for filename in ("index.html", "app.js", "styles.css", "stellar-cyber-logo.svg"):
+        assert (ROOT / "app" / "static" / filename).is_file()
+
+
+def test_state_backup_and_restore_test_scripts(tmp_path):
+    state_dir = tmp_path / "stellar-data-exporter"
+    state_dir.mkdir()
+    for name in ("export-jobs.sqlite3", "export-schedules.sqlite3"):
+        with sqlite3.connect(state_dir / name) as conn:
+            conn.execute("CREATE TABLE sample (value TEXT)")
+            conn.execute("INSERT INTO sample VALUES ('ok')")
+    (state_dir / "schedule.key").write_text("test-key")
+
+    archive = tmp_path / "state.tgz"
+    subprocess.run(
+        [ROOT / "scripts/backup-state.sh", state_dir, archive],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert archive.is_file()
+    assert archive.stat().st_mode & 0o777 == 0o600
+    result = subprocess.run(
+        [ROOT / "scripts/restore-test.sh", archive],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert "Restore test PASS" in result.stdout
 
 
 def test_production_runbook_preserves_encryption_key_and_private_backend():
