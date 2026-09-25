@@ -14,8 +14,10 @@ def read(relative):
 def test_systemd_service_is_loopback_only_and_hardened():
     unit = read("deploy/systemd/stellar-data-exporter.service")
 
+    assert "ExecStart=/opt/stellar-data-exporter/.venv/bin/stellar-data-exporter" in unit
     assert "--host 127.0.0.1" in unit
     assert "--host 0.0.0.0" not in unit
+    assert "--proxy-headers" in unit
     assert "--forwarded-allow-ips=127.0.0.1" in unit
     assert "StateDirectory=stellar-data-exporter" in unit
     assert "StateDirectoryMode=0700" in unit

@@ -87,6 +87,25 @@ The adapter exchanges the account email and All-Access Token at
 10-minute lifetime, and refreshes automatically during long-running exports. A 401 from
 the data API forces one immediate JWT refresh and retry.
 
+## Install and run
+
+Python 3.12+ and [uv](https://docs.astral.sh/uv/) are recommended.
+
+From a source checkout:
+
+```bash
+uv sync --frozen
+uv run stellar-data-exporter
+```
+
+The packaged launcher binds to `127.0.0.1:8787` by default and does not trust proxy headers unless
+`--proxy-headers` is explicitly enabled. Useful overrides are also available through
+`STELLAR_EXPORTER_HOST`, `STELLAR_EXPORTER_PORT`, `STELLAR_EXPORTER_SSL_KEYFILE`,
+`STELLAR_EXPORTER_SSL_CERTFILE`, and `STELLAR_EXPORTER_FORWARDED_ALLOW_IPS`.
+
+After building a wheel, the same command is installed as the `stellar-data-exporter` console
+entry point.
+
 ## Run development HTTPS
 
 The development server is served directly over HTTPS on port 8787.
