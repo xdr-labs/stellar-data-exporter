@@ -3,7 +3,7 @@ import tomllib
 
 import pytest
 
-from app import cli
+from app import __version__, cli
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_package_exposes_console_entry_point():
     config = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert config["project"]["scripts"]["stellar-data-exporter"] == "app.cli:main"
+
+
+def test_cli_reports_package_version(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser().parse_args(["--version"])
+
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"stellar-data-exporter {__version__}"
 
 
 def test_cli_defaults_to_loopback_and_safe_proxy_handling(monkeypatch):

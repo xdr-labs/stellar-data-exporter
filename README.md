@@ -95,10 +95,11 @@ From a source checkout:
 
 ```bash
 uv sync --frozen
+uv run stellar-data-exporter --version
 uv run stellar-data-exporter
 ```
 
-The packaged launcher binds to `127.0.0.1:8787` by default and does not trust proxy headers unless
+The runtime version is also returned by `GET /api/health`. The packaged launcher binds to `127.0.0.1:8787` by default and does not trust proxy headers unless
 `--proxy-headers` is explicitly enabled. Useful overrides are also available through
 `STELLAR_EXPORTER_HOST`, `STELLAR_EXPORTER_PORT`, `STELLAR_EXPORTER_SSL_KEYFILE`,
 `STELLAR_EXPORTER_SSL_CERTFILE`, and `STELLAR_EXPORTER_FORWARDED_ALLOW_IPS`.

@@ -5,9 +5,22 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import app.main as main_app
+from app import __version__
 from app.job_store import JobStore
 from app.main import app
 from app.stellar import StellarClient
+
+
+def test_health_exposes_runtime_version():
+    response = TestClient(app).get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "service": "stellar-data-exporter",
+        "version": __version__,
+    }
+    assert app.version == __version__
 
 
 async def fake_search(self, index, body):

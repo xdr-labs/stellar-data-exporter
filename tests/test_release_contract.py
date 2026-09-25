@@ -1,6 +1,8 @@
 from pathlib import Path
 import subprocess
 
+from app import __version__
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "c16edb8c2a86f194f21c5ba16e5f75673a15ba5c"
@@ -46,8 +48,8 @@ def test_release_scripts_are_executable():
 def test_hash_release_artifacts_writes_and_verifies_sha256(tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
-    (dist / "stellar_data_exporter-0.1.0-py3-none-any.whl").write_bytes(b"wheel")
-    (dist / "stellar_data_exporter-0.1.0.tar.gz").write_bytes(b"sdist")
+    (dist / f"stellar_data_exporter-{__version__}-py3-none-any.whl").write_bytes(b"wheel")
+    (dist / f"stellar_data_exporter-{__version__}.tar.gz").write_bytes(b"sdist")
     sums = dist / "SHA256SUMS"
 
     result = subprocess.run(
