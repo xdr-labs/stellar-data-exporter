@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
+from . import __version__
 from .destinations import (
     build_s3_key,
     build_sftp_path,
@@ -142,7 +143,7 @@ async def lifespan(_: FastAPI):
             await asyncio.gather(*active, return_exceptions=True)
 
 
-app = FastAPI(title="Stellar Data Exporter", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Stellar Data Exporter", version=__version__, lifespan=lifespan)
 
 
 def client_for(
@@ -971,7 +972,7 @@ async def stellar_cyber_logo() -> FileResponse:
 
 @app.get("/api/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "stellar-data-exporter"}
+    return {"status": "ok", "service": "stellar-data-exporter", "version": __version__}
 
 
 @app.get("/api/data-sources")

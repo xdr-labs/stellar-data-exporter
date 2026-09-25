@@ -6,6 +6,8 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+from app import __version__
+
 
 SDIST_REQUIRED = {
     ".engineering/project.yaml",
@@ -76,6 +78,7 @@ def main() -> None:
     require_all(wheel_names, WHEEL_REQUIRED, "wheel")
 
     for value in (
+        f"Version: {__version__}",
         "Project-URL: Repository, https://github.com/xdr-labs/stellar-data-exporter",
         "Project-URL: Issues, https://github.com/xdr-labs/stellar-data-exporter/issues",
         "Description-Content-Type: text/markdown",

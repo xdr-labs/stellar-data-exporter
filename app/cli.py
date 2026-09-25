@@ -5,11 +5,18 @@ import os
 
 import uvicorn
 
+from . import __version__
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stellar-data-exporter",
         description="Run the Stellar Data Exporter web service.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "--host",

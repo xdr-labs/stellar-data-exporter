@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stellar-data-exporter"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Web UI for exporting Stellar Cyber query results as CSV or JSON."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -39,6 +39,9 @@ namespaces = false
 
 [tool.setuptools.package-data]
 app = ["static/*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "app.__version__"}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
