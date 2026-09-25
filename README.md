@@ -27,6 +27,8 @@ The first working slice is intentionally small:
 - live in-memory export execution state plus SQLite-backed persistent export history for browser, S3-compatible, and SFTP destinations
 - live progress metrics: records, transferred bytes, files, current slice, queries, retries, rate, and elapsed time
 - cooperative cancellation with S3 multipart abort and SFTP partial-file cleanup
+- durable completed-part checkpoints for split S3/SFTP exports with filename, size, SHA-256, and remote result URI
+- resume/retry for failed, cancelled, or restart-interrupted remote jobs; verified completed split parts are skipped and credentials are re-entered rather than persisted
 - relative time presets (15m, 1h, 24h, 7d) plus custom relative ranges
 - saved export profiles in browser localStorage with credentials explicitly excluded
 - browser-local query history and favorites
@@ -60,13 +62,15 @@ wildcards spanning more than 24 hours.
 - saved profiles persist only non-secret configuration; account token, S3 keys, SFTP passwords, and private keys are excluded
 - credentials are held only in process memory for request handling and one-time export jobs
 - persistent job history stores sanitized metadata only; API tokens, raw queries, account email, S3 credentials, and SFTP passwords/private keys are excluded
-- active jobs interrupted by an exporter restart are recorded as `interrupted`; automatic resume is intentionally deferred to P2 checkpoint/resume
+- active jobs interrupted by an exporter restart are recorded as `interrupted`; remote jobs can then be resumed after the operator re-enters the original export settings and credentials
+- resume identity is stored only as a SHA-256 fingerprint of export-affecting non-credential settings plus the query content; the raw query is not persisted
+- completed split parts are re-generated and SHA-256 verified before they are skipped, so changed query/output data fails closed instead of silently producing mixed exports
 - one-time download job identifiers expire after 10 minutes, while their sanitized history remains available
 - TLS verification is enabled by default
 - there is currently no multi-user isolation layer; deploy this MVP only in a trusted environment
 - never expose the service directly to the public Internet in its current development state
 
-Persistent job history defaults to `.data/export-jobs.sqlite3` with owner-only file permissions. Set `STELLAR_EXPORTER_JOB_DB` to override the database path. The store contains sanitized job metadata and progress/result fields only; executable payloads and credentials remain memory-only.
+Persistent job history defaults to `.data/export-jobs.sqlite3` with owner-only file permissions. Set `STELLAR_EXPORTER_JOB_DB` to override the database path. The store contains sanitized job metadata, resume fingerprint, completed-part checkpoints, and progress/result fields only; executable payloads and credentials remain memory-only. Split remote exports resume at verified part boundaries. A non-split remote job has no completed part boundary, so Resume retries that single file from the beginning.
 
 ## Stellar Cyber API authentication
 
@@ -126,7 +130,7 @@ P0 query/export usability and P1 user productivity are implemented and browser-v
 
 P2 operationalization, after one-shot export is stable:
 1. persistent job store and export history without plaintext credentials — implemented
-2. checkpoint/resume and retry-from-checkpoint for remote destinations
+2. checkpoint/resume and retry-from-checkpoint for remote destinations — implemented at durable split-part boundaries; non-split retries from the beginning
 3. overlap/dedup strategy for resumed or scheduled exports
 4. optional scheduled exports with encrypted credential persistence
 5. production hardening: reverse proxy, access boundary, rate limits, deployment/runbook

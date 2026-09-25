@@ -588,6 +588,26 @@ function destinationPayload() {
   };
 }
 
+function exportPayload() {
+  if (isAdvancedMode() && state.previewFields.length && !state.selectedFields.length) {
+    throw new Error("Select at least one export field.");
+  }
+  return {
+    ...basePayload(),
+    selected_fields: isAdvancedMode() && state.previewFields.length ? [...state.selectedFields] : null,
+    record_limit: recordLimitValue(),
+    format: selectedFormat(),
+    compress: $("compress").checked,
+    filename: $("filename").value.trim() || "stellar-export",
+    max_file_size_bytes: splitSizeBytes(),
+    csv_delimiter: csvDelimiterValue(),
+    csv_include_header: $("csvHeader").checked,
+    csv_bom: $("csvBom").checked,
+    csv_flatten_nested: $("csvFlatten").checked,
+    destination: destinationPayload(),
+  };
+}
+
 function setRadioValue(name, value) {
   const input = document.querySelector(`input[name="${name}"][value="${CSS.escape(String(value))}"]`);
   if (input) input.checked = true;
@@ -1309,7 +1329,7 @@ function renderExportHistory(items) {
   const body = $("exportHistoryBody");
   if (!body) return;
   if (!items.length) {
-    body.innerHTML = '<tr><td colspan="8" class="muted">No export jobs yet.</td></tr>';
+    body.innerHTML = '<tr><td colspan="10" class="muted">No export jobs yet.</td></tr>';
     return;
   }
   body.innerHTML = items.map((item) => {
@@ -1321,6 +1341,11 @@ function renderExportHistory(items) {
     const status = String(item.status || "unknown");
     const created = formatHistoryDate(item.created_at);
     const range = formatHistoryRange(summary);
+    const completedParts = Array.isArray(item.completed_parts) ? item.completed_parts.length : 0;
+    const checkpoint = completedParts ? `${completedParts} saved part${completedParts === 1 ? "" : "s"}` : "—";
+    const action = item.resumable
+      ? `<button class="button secondary small resume-export" type="button" data-job-id="${escapeHtml(item.job_id)}">Resume</button>`
+      : "—";
     return `<tr>
       <td title="${escapeHtml(created)}">${escapeHtml(created)}</td>
       <td><span class="history-status history-${escapeHtml(status)}">${escapeHtml(status)}</span></td>
@@ -1329,9 +1354,14 @@ function renderExportHistory(items) {
       <td>${escapeHtml(output)}</td>
       <td>${escapeHtml(destination)}</td>
       <td>${Number(item.records_exported || 0).toLocaleString()} / ${escapeHtml(humanBytes(item.bytes_sent || 0))}</td>
+      <td>${escapeHtml(checkpoint)}</td>
+      <td>${action}</td>
       <td title="${escapeHtml(result)}">${escapeHtml(result)}</td>
     </tr>`;
   }).join("");
+  body.querySelectorAll(".resume-export").forEach((button) => {
+    button.addEventListener("click", () => resumeExport(button.dataset.jobId, button));
+  });
 }
 
 async function loadExportHistory() {
@@ -1341,32 +1371,57 @@ async function loadExportHistory() {
     const response = await api("/api/export/history?limit=50");
     renderExportHistory(response.jobs || []);
   } catch (error) {
-    body.innerHTML = `<tr><td colspan="8" class="status error">${escapeHtml(error.message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" class="status error">${escapeHtml(error.message)}</td></tr>`;
+  }
+}
+
+async function resumeExport(jobId, button) {
+  if (!jobId) return;
+  try {
+    if (state.activeExport) throw new Error("Another export is already active.");
+    setBusy(button, true, "Resuming…");
+    setStatus("runStatus", "Validating saved checkpoint against the current export settings…");
+    const result = await api(`/api/export/jobs/${encodeURIComponent(jobId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify(exportPayload()),
+    });
+    state.activeExport = {
+      jobId: result.job_id,
+      statusUrl: result.status_url,
+      cancelUrl: result.cancel_url,
+    };
+    renderExportProgress({
+      status: "pending",
+      records_exported: 0,
+      bytes_sent: 0,
+      files_completed: result.resumed_from_parts || 0,
+      query_count: 0,
+      retry_count: 0,
+      elapsed_seconds: 0,
+      rate_records_per_second: 0,
+    });
+    setStatus(
+      "runStatus",
+      `Resuming export after ${result.resumed_from_parts || 0} verified completed part(s)…`,
+    );
+    await pollExport(result.status_url);
+  } catch (error) {
+    setStatus("runStatus", error.message, "error");
+  } finally {
+    state.activeExport = null;
+    $("cancelExport").disabled = true;
+    if (button?.isConnected) setBusy(button, false);
+    await loadExportHistory();
   }
 }
 
 async function runExport() {
   const button = $("runExport");
   try {
+    if (state.activeExport) throw new Error("Another export is already active.");
     setBusy(button, true, "Running export…");
     setStatus("runStatus", "Creating export job…");
-    if (isAdvancedMode() && state.previewFields.length && !state.selectedFields.length) {
-      throw new Error("Select at least one export field.");
-    }
-    const payload = {
-      ...basePayload(),
-      selected_fields: isAdvancedMode() && state.previewFields.length ? [...state.selectedFields] : null,
-      record_limit: recordLimitValue(),
-      format: selectedFormat(),
-      compress: $("compress").checked,
-      filename: $("filename").value.trim() || "stellar-export",
-      max_file_size_bytes: splitSizeBytes(),
-      csv_delimiter: csvDelimiterValue(),
-      csv_include_header: $("csvHeader").checked,
-      csv_bom: $("csvBom").checked,
-      csv_flatten_nested: $("csvFlatten").checked,
-      destination: destinationPayload(),
-    };
+    const payload = exportPayload();
     const result = await api("/api/export/jobs", {
       method: "POST",
       body: JSON.stringify(payload),

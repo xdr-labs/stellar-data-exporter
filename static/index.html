@@ -459,15 +459,16 @@
             <thead>
               <tr>
                 <th>Created</th><th>Status</th><th>Sources</th><th>Range</th>
-                <th>Output</th><th>Destination</th><th>Records / Size</th><th>Result</th>
+                <th>Output</th><th>Destination</th><th>Records / Size</th>
+                <th>Checkpoint</th><th>Action</th><th>Result</th>
               </tr>
             </thead>
             <tbody id="exportHistoryBody">
-              <tr><td colspan="8" class="muted">Loading export history…</td></tr>
+              <tr><td colspan="10" class="muted">Loading export history…</td></tr>
             </tbody>
           </table>
         </div>
-        <p class="hint">Stored metadata excludes API tokens, S3 credentials, SFTP passwords/private keys, and query contents.</p>
+        <p class="hint">Stored metadata excludes API tokens, S3 credentials, SFTP passwords/private keys, and raw query contents. Resume verifies completed split parts by SHA-256; re-enter the original settings and credentials before resuming.</p>
       </section>
     </section>
 

@@ -153,7 +153,7 @@ class JobStore:
                     updated_at = ?,
                     error = COALESCE(
                         error,
-                        'Exporter restarted before this job completed; resume is not available yet.'
+                        'Exporter restarted before this job completed. Re-enter the original export settings and credentials to resume.'
                     )
                 WHERE status IN ('pending', 'running')
                 """,

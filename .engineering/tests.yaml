@@ -48,4 +48,5 @@ scenarios:
     invariants:
       - "query time filters, record flattening, and adaptive slicing regressions pass"
       - "persistent export history survives process-memory loss without persisting credentials or raw queries"
+      - "remote split-export checkpoints persist completed part hashes and resume skips only regenerated parts that exactly match saved checkpoints"
     release_gate: true

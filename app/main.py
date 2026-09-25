@@ -16,7 +16,14 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
-from .destinations import test_s3, test_sftp, upload_s3, upload_sftp
+from .destinations import (
+    build_s3_key,
+    build_sftp_path,
+    test_s3,
+    test_sftp,
+    upload_s3,
+    upload_sftp,
+)
 from .exporter import (
     ExportCancelled,
     ExportEngine,
@@ -103,6 +110,60 @@ def client_for(
     )
 
 
+def resume_fingerprint(payload: ExportInput) -> str:
+    if isinstance(payload.destination, S3Destination):
+        destination_target: dict[str, Any] = {
+            "type": "s3",
+            "endpoint_url": payload.destination.endpoint_url,
+            "region": payload.destination.region,
+            "bucket": payload.destination.bucket,
+            "prefix": payload.destination.prefix,
+            "force_path_style": payload.destination.force_path_style,
+        }
+    elif isinstance(payload.destination, SFTPDestination):
+        destination_target = {
+            "type": "sftp",
+            "host": payload.destination.host,
+            "port": payload.destination.port,
+            "username": payload.destination.username,
+            "remote_path": payload.destination.remote_path,
+            "verify_host_key": payload.destination.verify_host_key,
+        }
+    else:
+        destination_target = {"type": "download"}
+
+    identity = {
+        "host": str(payload.host),
+        "sources": [getattr(source, "value", str(source)) for source in payload.sources],
+        "time_field": payload.time_field,
+        "start": payload.start.isoformat(),
+        "end": payload.end.isoformat(),
+        "query_mode": payload.query_mode,
+        "query": payload.query,
+        "stellar_query": payload.stellar_query,
+        "target_records_per_slice": payload.target_records_per_slice,
+        "minimum_slice_ms": payload.minimum_slice_ms,
+        "format": payload.format,
+        "compress": payload.compress,
+        "filename": (payload.filename or "stellar-export").strip() or "stellar-export",
+        "max_file_size_bytes": payload.max_file_size_bytes,
+        "selected_fields": payload.selected_fields,
+        "record_limit": payload.record_limit,
+        "csv_delimiter": payload.csv_delimiter,
+        "csv_include_header": payload.csv_include_header,
+        "csv_bom": payload.csv_bom,
+        "csv_flatten_nested": payload.csv_flatten_nested,
+        "destination": destination_target,
+    }
+    canonical = json.dumps(
+        identity,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def sanitized_export_metadata(payload: ExportInput) -> dict[str, Any]:
     return {
         "host": str(payload.host),
@@ -117,6 +178,7 @@ def sanitized_export_metadata(payload: ExportInput) -> dict[str, Any]:
         "record_limit": payload.record_limit,
         "selected_field_count": len(payload.selected_fields or []),
         "destination_type": payload.destination.type,
+        "resume_fingerprint": resume_fingerprint(payload),
     }
 
 
@@ -156,6 +218,58 @@ def file_sha256(path: str) -> str:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def checkpoint_destination_result(
+    destination: S3Destination | SFTPDestination,
+    filename: str,
+) -> str:
+    if isinstance(destination, S3Destination):
+        return f"s3://{destination.bucket}/{build_s3_key(destination.prefix, filename)}"
+    return (
+        f"sftp://{destination.host}:{destination.port}"
+        f"{build_sftp_path(destination.remote_path, filename)}"
+    )
+
+
+def validate_resume_payload(record: dict[str, Any], payload: ExportInput) -> None:
+    expected = record.get("metadata") or {}
+    actual = sanitized_export_metadata(payload)
+    if actual != expected:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Resume settings do not match the original export. "
+                "Use the same source, time range, query mode, output, split, field count, "
+                "and destination type."
+            ),
+        )
+    if isinstance(payload.destination, DownloadDestination):
+        raise HTTPException(
+            status_code=400,
+            detail="Checkpoint resume is available only for S3 or SFTP exports.",
+        )
+    for checkpoint in record.get("completed_parts") or []:
+        filename = checkpoint.get("filename")
+        if not filename or checkpoint.get("result") != checkpoint_destination_result(
+            payload.destination,
+            filename,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Resume destination does not match the destination used by the "
+                    "saved completed parts."
+                ),
+            )
+
+
+def resumable_status(status: str, summary: dict[str, Any]) -> bool:
+    return (
+        status in {"failed", "cancelled", "interrupted"}
+        and summary.get("destination_type") in {"s3", "sftp"}
+        and bool(summary.get("resume_fingerprint"))
+    )
 
 
 def cleanup_jobs() -> None:
@@ -327,6 +441,7 @@ def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
         "result": job.result,
         "error": job.error,
         "completed_parts": list(job.completed_parts),
+        "resumable": resumable_status(job.status, job.metadata),
     }
 
 
@@ -355,6 +470,7 @@ def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
         "result": record.get("result"),
         "error": record.get("error"),
         "completed_parts": list(record.get("completed_parts") or []),
+        "resumable": resumable_status(record["status"], record.get("metadata") or {}),
     }
 
 
@@ -432,20 +548,46 @@ async def run_destination_job(job_id: str) -> None:
             job.files_completed = 1
         else:
             parts, content_type, _ = build_output_parts(payload, job)
+            checkpoint_parts = list(job.completed_parts)
             results: list[str] = []
+            generated_parts = 0
             async for part in parts:
+                generated_parts += 1
                 try:
+                    part_sha256 = await asyncio.to_thread(file_sha256, part.path)
+                    if generated_parts <= len(checkpoint_parts):
+                        checkpoint = checkpoint_parts[generated_parts - 1]
+                        expected_result = checkpoint_destination_result(
+                            payload.destination,
+                            part.filename,
+                        )
+                        matches_checkpoint = (
+                            checkpoint.get("part_number") == generated_parts
+                            and checkpoint.get("filename") == part.filename
+                            and checkpoint.get("size_bytes") == part.size_bytes
+                            and checkpoint.get("sha256") == part_sha256
+                            and checkpoint.get("result") == expected_result
+                        )
+                        if not matches_checkpoint:
+                            raise RuntimeError(
+                                f"Checkpoint mismatch at part {generated_parts}; "
+                                "the regenerated export no longer matches the saved checkpoint."
+                            )
+                        results.append(expected_result)
+                        job.files_completed += 1
+                        persist_job(job, force=True)
+                        continue
+
                     uploaded_result = await upload_one(
                         part.filename,
                         file_stream(part.path),
                         content_type,
                     )
-                    part_sha256 = await asyncio.to_thread(file_sha256, part.path)
                     results.append(uploaded_result)
                     job.files_completed += 1
                     job.completed_parts.append(
                         {
-                            "part_number": job.files_completed,
+                            "part_number": generated_parts,
                             "filename": part.filename,
                             "size_bytes": part.size_bytes,
                             "sha256": part_sha256,
@@ -457,6 +599,10 @@ async def run_destination_job(job_id: str) -> None:
                     if os.path.exists(part.path):
                         os.unlink(part.path)
 
+            if generated_parts < len(checkpoint_parts):
+                raise RuntimeError(
+                    "Checkpoint mismatch: regenerated export ended before all saved parts."
+                )
             if len(results) == 1:
                 job.result = results[0]
             elif results:
@@ -643,6 +789,44 @@ async def export_history(limit: int = 50) -> dict[str, Any]:
         persist_job(job)
     return {
         "jobs": [stored_job_status_payload(record) for record in JOB_STORE.list(limit)],
+    }
+
+
+@app.post("/api/export/jobs/{job_id}/resume")
+async def resume_export_job(job_id: str, payload: ExportInput) -> dict[str, Any]:
+    cleanup_jobs()
+    active = EXPORT_JOBS.get(job_id)
+    if active is not None and active.status in {"pending", "running"}:
+        raise HTTPException(status_code=409, detail="Export job is already active")
+
+    record = JOB_STORE.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    if not resumable_status(record["status"], record.get("metadata") or {}):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Export job in status {record['status']} cannot be resumed",
+        )
+
+    validate_resume_payload(record, payload)
+    checkpoints = list(record.get("completed_parts") or [])
+    job = ExportJob(
+        job_id=job_id,
+        created_at=record["created_at"],
+        payload=payload,
+        metadata=sanitized_export_metadata(payload),
+        bytes_sent=sum(int(part.get("size_bytes") or 0) for part in checkpoints),
+        completed_parts=checkpoints,
+    )
+    EXPORT_JOBS[job_id] = job
+    persist_job(job, force=True)
+    job.task = asyncio.create_task(run_destination_job(job_id))
+    return {
+        "job_id": job_id,
+        "mode": "background",
+        "status_url": f"/api/export/jobs/{job_id}",
+        "cancel_url": f"/api/export/jobs/{job_id}/cancel",
+        "resumed_from_parts": len(checkpoints),
     }
 
 
