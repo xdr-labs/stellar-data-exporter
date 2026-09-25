@@ -61,6 +61,27 @@ def test_web_assets_are_packaged_with_the_application():
         assert (ROOT / "app" / "static" / filename).is_file()
 
 
+def test_release_manifest_keeps_operational_files_in_source_distribution():
+    manifest = read("MANIFEST.in")
+    for entry in (
+        "include .engineering/project.yaml",
+        "include .engineering/tests.yaml",
+        "include .engineering/release.yaml",
+        "recursive-include deploy *",
+        "recursive-include docs *",
+        "recursive-include scripts *.sh",
+        "recursive-include schemas *.json",
+        "recursive-include tools *.py",
+    ):
+        assert entry in manifest
+
+    config = tomllib.loads(read("pyproject.toml"))
+    project = config["project"]
+    assert project["readme"] == "README.md"
+    assert project["urls"]["Repository"] == "https://github.com/xdr-labs/stellar-data-exporter"
+    assert project["urls"]["Issues"] == "https://github.com/xdr-labs/stellar-data-exporter/issues"
+
+
 def test_state_backup_and_restore_test_scripts(tmp_path):
     state_dir = tmp_path / "stellar-data-exporter"
     state_dir.mkdir()
