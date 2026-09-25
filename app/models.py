@@ -40,7 +40,9 @@ class QueryInput(BaseModel):
     time_field: str = Field(default="timestamp", min_length=1)
     start: datetime
     end: datetime
-    query: dict[str, Any]
+    query_mode: Literal["elasticsearch_dsl", "stellar_lucene"] = "elasticsearch_dsl"
+    query: dict[str, Any] = Field(default_factory=lambda: {"query": {"match_all": {}}})
+    stellar_query: str | None = None
     preview_limit: int = Field(default=100, ge=1, le=500)
     target_records_per_slice: int = Field(default=5000, ge=100, le=50000)
     minimum_slice_ms: int = Field(default=1, ge=1, le=60000)
@@ -52,6 +54,12 @@ class QueryInput(BaseModel):
         if start is not None and end <= start:
             raise ValueError("end must be later than start")
         return end
+
+    @model_validator(mode="after")
+    def validate_query_input(self):
+        if self.query_mode == "stellar_lucene" and not (self.stellar_query or "").strip():
+            raise ValueError("stellar_query is required for Stellar Cyber Query mode")
+        return self
 
 
 class DownloadDestination(BaseModel):

@@ -8,6 +8,19 @@ from typing import Any
 DOCUMENT_ONLY_KEYS = {"aggs", "aggregations", "collapse"}
 
 
+def compile_user_query(
+    query_mode: str,
+    raw: dict[str, Any],
+    stellar_query: str | None = None,
+) -> dict[str, Any]:
+    if query_mode == "stellar_lucene":
+        expression = (stellar_query or "").strip()
+        if not expression:
+            raise ValueError("Stellar Cyber Query cannot be empty")
+        return {"query": {"query_string": {"query": expression}}}
+    return deepcopy(raw)
+
+
 def build_document_query(
     raw: dict[str, Any],
     *,

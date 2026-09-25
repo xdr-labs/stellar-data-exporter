@@ -108,3 +108,34 @@ def test_index_plan_endpoint_and_preview_use_date_scoped_target(monkeypatch):
             "aella-wineventlog-2026-09-25-*"
         )
     ]
+
+
+def test_stellar_lucene_preview_compiles_query_and_keeps_managed_time_filter(monkeypatch):
+    captured = {}
+
+    async def capture_search(self, index, body):
+        captured["index"] = index
+        captured["body"] = body
+        return {
+            "took": 4,
+            "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []},
+        }
+
+    monkeypatch.setattr(StellarClient, "search", capture_search)
+    client = TestClient(app)
+    request = payload()
+    request.update({
+        "query_mode": "stellar_lucene",
+        "query": {},
+        "stellar_query": 'event_status:New AND event_name:"Login Failure"',
+    })
+
+    response = client.post("/api/query/preview", json=request)
+    assert response.status_code == 200
+    must = captured["body"]["query"]["bool"]["must"][0]
+    assert must == {
+        "query_string": {
+            "query": 'event_status:New AND event_name:"Login Failure"'
+        }
+    }
+    assert captured["body"]["query"]["bool"]["filter"][0]["range"]["timestamp"]

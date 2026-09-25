@@ -52,13 +52,42 @@ function flatten(value, prefix = "", out = {}) {
   return out;
 }
 
+function selectedQueryMode() {
+  return document.querySelector('input[name="queryMode"]:checked')?.value || "elasticsearch_dsl";
+}
+
+function stellarQueryText() {
+  const expression = $("stellarQuery").value.trim();
+  if (!expression) throw new Error("Stellar Cyber Query cannot be empty.");
+  return expression;
+}
+
 function parseQuery() {
+  if (selectedQueryMode() === "stellar_lucene") {
+    return {query: {query_string: {query: stellarQueryText()}}};
+  }
+
   const raw = $("queryDsl").value.trim();
   const query = JSON.parse(raw || "{}");
   if (!query || Array.isArray(query) || typeof query !== "object") {
     throw new Error("Query must be a JSON object.");
   }
   return query;
+}
+
+function queryPayloadFields() {
+  if (selectedQueryMode() === "stellar_lucene") {
+    return {
+      query_mode: "stellar_lucene",
+      query: {},
+      stellar_query: stellarQueryText(),
+    };
+  }
+  return {
+    query_mode: "elasticsearch_dsl",
+    query: parseQuery(),
+    stellar_query: null,
+  };
 }
 
 function selectedDestinationType() {
@@ -269,7 +298,7 @@ function basePayload() {
     time_field: $("timeField").value.trim() || "timestamp",
     start,
     end,
-    query: parseQuery(),
+    ...queryPayloadFields(),
     preview_limit: 100,
     target_records_per_slice: Number($("targetRecords").value || 5000),
     minimum_slice_ms: Number($("minimumSlice").value || 1),
@@ -502,10 +531,26 @@ async function testRemoteDestination(statusId, buttonId) {
 function validateQuery() {
   try {
     parseQuery();
-    setStatus("queryStatus", "Valid JSON. Time range will be injected as a non-overlapping filter.", "success");
+    if (selectedQueryMode() === "stellar_lucene") {
+      setStatus("queryStatus", "Stellar Cyber Query is ready. Lucene syntax is validated by Stellar Cyber when Preview runs.", "success");
+    } else {
+      setStatus("queryStatus", "Valid JSON. Time range will be injected as a non-overlapping filter.", "success");
+    }
   } catch (error) {
     setStatus("queryStatus", error.message, "error");
   }
+}
+
+function updateQueryModeUI() {
+  const stellar = selectedQueryMode() === "stellar_lucene";
+  $("elasticQueryPanel").classList.toggle("hidden", stellar);
+  $("stellarQueryPanel").classList.toggle("hidden", !stellar);
+  $("validateQuery").textContent = stellar ? "Validate Query" : "Validate JSON";
+  document.querySelectorAll(".query-mode").forEach((label) => {
+    const radio = label.querySelector('input[name="queryMode"]');
+    label.classList.toggle("selected", !!radio?.checked);
+  });
+  updateSummary();
 }
 
 async function previewQuery() {
@@ -654,6 +699,9 @@ function initialize() {
   $("selectAllSources").addEventListener("click", () => setAllSources(true));
   $("clearSources").addEventListener("click", () => setAllSources(false));
   $("sftpAuthMethod").addEventListener("change", updateSftpAuthUI);
+  document.querySelectorAll('input[name="queryMode"]').forEach((radio) => {
+    radio.addEventListener("change", updateQueryModeUI);
+  });
   $("toggleActualIndices").addEventListener("click", () => {
     const target = $("resolvedIndices");
     const showing = !target.classList.contains("hidden");
@@ -675,6 +723,7 @@ function initialize() {
   });
 
   updateSftpAuthUI();
+  updateQueryModeUI();
   updateSummary();
   loadDataSources();
 }

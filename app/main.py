@@ -35,7 +35,7 @@ from .models import (
     SFTPDestination,
 )
 from .index_planner import plan_indices
-from .query import build_document_query, hit_source, total_hits
+from .query import build_document_query, compile_user_query, hit_source, total_hits
 from .sources import resolve_indices, source_catalog, source_labels
 from .stellar import (
     StellarAPIError,
@@ -101,10 +101,15 @@ def safe_filename(name: str | None, fmt: str, compressed: bool) -> str:
 
 def build_export_source(payload: ExportInput):
     client = client_for(payload)
+    raw_query = compile_user_query(
+        payload.query_mode,
+        payload.query,
+        payload.stellar_query,
+    )
     engine = ExportEngine(
         client,
         index=plan_indices(payload.sources, start=payload.start, end=payload.end).target,
-        raw_query=payload.query,
+        raw_query=raw_query,
         time_field=payload.time_field,
         start=payload.start,
         end=payload.end,
@@ -113,7 +118,7 @@ def build_export_source(payload: ExportInput):
     )
 
     preferred_fields = None
-    requested_source = payload.query.get("_source")
+    requested_source = raw_query.get("_source")
     if isinstance(requested_source, list):
         preferred_fields = [str(field) for field in requested_source]
 
@@ -300,8 +305,13 @@ async def index_plan(payload: IndexPlanInput) -> dict[str, Any]:
 
 @app.post("/api/query/preview")
 async def preview(payload: QueryInput) -> dict[str, Any]:
-    body = build_document_query(
+    raw_query = compile_user_query(
+        payload.query_mode,
         payload.query,
+        payload.stellar_query,
+    )
+    body = build_document_query(
+        raw_query,
         time_field=payload.time_field,
         start=payload.start,
         end=payload.end,
