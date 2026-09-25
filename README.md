@@ -24,7 +24,7 @@ The first working slice is intentionally small:
 - S3-compatible upload (AWS S3, Cloudflare R2, MinIO) with multipart streaming
 - SFTP upload with password or SSH private-key authentication
 - split S3/SFTP exports write each numbered part separately
-- in-memory export job status for browser, S3-compatible, and SFTP destinations
+- live in-memory export execution state plus SQLite-backed persistent export history for browser, S3-compatible, and SFTP destinations
 - live progress metrics: records, transferred bytes, files, current slice, queries, retries, rate, and elapsed time
 - cooperative cancellation with S3 multipart abort and SFTP partial-file cleanup
 - relative time presets (15m, 1h, 24h, 7d) plus custom relative ranges
@@ -59,10 +59,14 @@ wildcards spanning more than 24 hours.
 - credentials are not persisted to disk, a database, or browser localStorage
 - saved profiles persist only non-secret configuration; account token, S3 keys, SFTP passwords, and private keys are excluded
 - credentials are held only in process memory for request handling and one-time export jobs
-- one-time download job identifiers expire after 10 minutes
+- persistent job history stores sanitized metadata only; API tokens, raw queries, account email, S3 credentials, and SFTP passwords/private keys are excluded
+- active jobs interrupted by an exporter restart are recorded as `interrupted`; automatic resume is intentionally deferred to P2 checkpoint/resume
+- one-time download job identifiers expire after 10 minutes, while their sanitized history remains available
 - TLS verification is enabled by default
 - there is currently no multi-user isolation layer; deploy this MVP only in a trusted environment
 - never expose the service directly to the public Internet in its current development state
+
+Persistent job history defaults to `.data/export-jobs.sqlite3` with owner-only file permissions. Set `STELLAR_EXPORTER_JOB_DB` to override the database path. The store contains sanitized job metadata and progress/result fields only; executable payloads and credentials remain memory-only.
 
 ## Stellar Cyber API authentication
 
@@ -121,7 +125,7 @@ node --check static/app.js
 P0 query/export usability and P1 user productivity are implemented and browser-verified.
 
 P2 operationalization, after one-shot export is stable:
-1. persistent job store and export history without plaintext credentials
+1. persistent job store and export history without plaintext credentials — implemented
 2. checkpoint/resume and retry-from-checkpoint for remote destinations
 3. overlap/dedup strategy for resumed or scheduled exports
 4. optional scheduled exports with encrypted credential persistence

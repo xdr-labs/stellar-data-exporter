@@ -11,3 +11,5 @@ htmlcov/
 .e2e/
 .tls/
 .tmp-audit/
+
+.data/

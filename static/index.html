@@ -443,6 +443,32 @@
         </div>
         <button id="runExport" class="button run final-run">Run export</button>
       </section>
+
+      <section class="card export-history-card" id="exportHistoryCard">
+        <div class="history-header">
+          <div class="section-title">
+            <div>
+              <h2>Export History</h2>
+              <p>Recent jobs persist across exporter restarts without storing credentials or raw queries.</p>
+            </div>
+          </div>
+          <button id="refreshExportHistory" class="button secondary small" type="button">Refresh</button>
+        </div>
+        <div class="table-wrap history-table-wrap">
+          <table id="exportHistoryTable">
+            <thead>
+              <tr>
+                <th>Created</th><th>Status</th><th>Sources</th><th>Range</th>
+                <th>Output</th><th>Destination</th><th>Records / Size</th><th>Result</th>
+              </tr>
+            </thead>
+            <tbody id="exportHistoryBody">
+              <tr><td colspan="8" class="muted">Loading export history…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint">Stored metadata excludes API tokens, S3 credentials, SFTP passwords/private keys, and query contents.</p>
+      </section>
     </section>
 
     <aside class="summary-card">

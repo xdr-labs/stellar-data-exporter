@@ -39,6 +39,7 @@ from .models import (
     SFTPDestination,
 )
 from .index_planner import plan_indices
+from .job_store import JobStore
 from .query import build_document_query, compile_user_query, hit_source, total_hits
 from .sources import resolve_indices, source_catalog, source_labels
 from .stellar import (
@@ -54,12 +55,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 DOWNLOAD_JOB_TTL_SECONDS = 600
 HISTORY_JOB_TTL_SECONDS = 3600
+JOB_DB_PATH = Path(os.environ.get("STELLAR_EXPORTER_JOB_DB", str(BASE_DIR / ".data" / "export-jobs.sqlite3")))
+JOB_STORE = JobStore(JOB_DB_PATH)
+JOB_STORE.recover_interrupted()
 
 
 @dataclass
 class ExportJob:
+    job_id: str
     created_at: float
     payload: ExportInput | None
+    metadata: dict[str, Any] = field(default_factory=dict)
     status: str = "pending"
     started_at: float | None = None
     completed_at: float | None = None
@@ -74,6 +80,7 @@ class ExportJob:
     result: str | None = None
     error: str | None = None
     task: asyncio.Task | None = field(default=None, repr=False)
+    last_persisted_at: float = field(default=0.0, repr=False)
 
 
 EXPORT_JOBS: dict[str, ExportJob] = {}
@@ -94,6 +101,52 @@ def client_for(
     )
 
 
+def sanitized_export_metadata(payload: ExportInput) -> dict[str, Any]:
+    return {
+        "host": str(payload.host),
+        "sources": [getattr(source, "value", str(source)) for source in payload.sources],
+        "start": payload.start.isoformat(),
+        "end": payload.end.isoformat(),
+        "query_mode": payload.query_mode,
+        "format": payload.format,
+        "filename": (payload.filename or "stellar-export").strip() or "stellar-export",
+        "compress": payload.compress,
+        "max_file_size_bytes": payload.max_file_size_bytes,
+        "record_limit": payload.record_limit,
+        "selected_field_count": len(payload.selected_fields or []),
+        "destination_type": payload.destination.type,
+    }
+
+
+def job_store_record(job: ExportJob) -> dict[str, Any]:
+    return {
+        "job_id": job.job_id,
+        "created_at": job.created_at,
+        "status": job.status,
+        "started_at": job.started_at,
+        "completed_at": job.completed_at,
+        "bytes_sent": job.bytes_sent,
+        "records_exported": job.records_exported,
+        "files_completed": job.files_completed,
+        "query_count": job.query_count,
+        "retry_count": job.retry_count,
+        "current_slice_start": job.current_slice_start,
+        "current_slice_end": job.current_slice_end,
+        "cancel_requested": job.cancel_requested,
+        "result": job.result,
+        "error": job.error,
+        "metadata": job.metadata,
+    }
+
+
+def persist_job(job: ExportJob, *, force: bool = False) -> None:
+    now = time.time()
+    if not force and now - job.last_persisted_at < 1.0:
+        return
+    JOB_STORE.save(job_store_record(job))
+    job.last_persisted_at = now
+
+
 def cleanup_jobs() -> None:
     now = time.time()
     for job_id, job in list(EXPORT_JOBS.items()):
@@ -101,8 +154,11 @@ def cleanup_jobs() -> None:
         terminal_anchor = job.completed_at or job.created_at
         terminal_age = now - terminal_anchor
         if job.status == "pending" and job.payload is not None and pending_age > DOWNLOAD_JOB_TTL_SECONDS:
+            job.payload = None
+            job.cancel_requested = True
+            mark_job_terminal(job, "expired", "Download job expired before it was started.")
             EXPORT_JOBS.pop(job_id, None)
-        elif job.status in {"completed", "failed", "cancelled"} and terminal_age > HISTORY_JOB_TTL_SECONDS:
+        elif job.status in {"completed", "failed", "cancelled", "expired", "interrupted"} and terminal_age > HISTORY_JOB_TTL_SECONDS:
             EXPORT_JOBS.pop(job_id, None)
 
 
@@ -226,12 +282,14 @@ def mark_job_started(job: ExportJob) -> None:
     if job.started_at is None:
         job.started_at = time.time()
     job.status = "running"
+    persist_job(job, force=True)
 
 
 def mark_job_terminal(job: ExportJob, status: str, error: str | None = None) -> None:
     job.status = status
     job.error = error
     job.completed_at = time.time()
+    persist_job(job, force=True)
 
 
 def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
@@ -241,6 +299,10 @@ def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
     return {
         "job_id": job_id,
         "status": job.status,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "completed_at": job.completed_at,
+        "summary": job.metadata,
         "records_exported": job.records_exported,
         "bytes_sent": job.bytes_sent,
         "files_completed": job.files_completed,
@@ -253,6 +315,33 @@ def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
         "cancel_requested": job.cancel_requested,
         "result": job.result,
         "error": job.error,
+    }
+
+
+def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
+    end_time = record.get("completed_at") or time.time()
+    started_at = record.get("started_at")
+    elapsed = max(0.0, end_time - started_at) if started_at else 0.0
+    exported = int(record.get("records_exported") or 0)
+    return {
+        "job_id": record["job_id"],
+        "status": record["status"],
+        "created_at": record["created_at"],
+        "started_at": started_at,
+        "completed_at": record.get("completed_at"),
+        "summary": record.get("metadata", {}),
+        "records_exported": exported,
+        "bytes_sent": int(record.get("bytes_sent") or 0),
+        "files_completed": int(record.get("files_completed") or 0),
+        "current_slice_start": record.get("current_slice_start"),
+        "current_slice_end": record.get("current_slice_end"),
+        "query_count": int(record.get("query_count") or 0),
+        "retry_count": int(record.get("retry_count") or 0),
+        "elapsed_seconds": elapsed,
+        "rate_records_per_second": (exported / elapsed) if elapsed > 0 else 0.0,
+        "cancel_requested": bool(record.get("cancel_requested")),
+        "result": record.get("result"),
+        "error": record.get("error"),
     }
 
 
@@ -491,8 +580,14 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
 async def create_export_job(payload: ExportInput) -> dict[str, str]:
     cleanup_jobs()
     job_id = uuid.uuid4().hex
-    job = ExportJob(created_at=time.time(), payload=payload)
+    job = ExportJob(
+        job_id=job_id,
+        created_at=time.time(),
+        payload=payload,
+        metadata=sanitized_export_metadata(payload),
+    )
     EXPORT_JOBS[job_id] = job
+    persist_job(job, force=True)
     status_url = f"/api/export/jobs/{job_id}"
     cancel_url = f"/api/export/jobs/{job_id}/cancel"
 
@@ -514,13 +609,27 @@ async def create_export_job(payload: ExportInput) -> dict[str, str]:
     }
 
 
+@app.get("/api/export/history")
+async def export_history(limit: int = 50) -> dict[str, Any]:
+    cleanup_jobs()
+    for job in EXPORT_JOBS.values():
+        persist_job(job)
+    return {
+        "jobs": [stored_job_status_payload(record) for record in JOB_STORE.list(limit)],
+    }
+
+
 @app.get("/api/export/jobs/{job_id}")
 async def export_job_status(job_id: str) -> dict[str, Any]:
     cleanup_jobs()
     job = EXPORT_JOBS.get(job_id)
-    if job is None:
+    if job is not None:
+        persist_job(job)
+        return job_status_payload(job_id, job)
+    record = JOB_STORE.get(job_id)
+    if record is None:
         raise HTTPException(status_code=404, detail="Export job not found or expired")
-    return job_status_payload(job_id, job)
+    return stored_job_status_payload(record)
 
 
 @app.post("/api/export/jobs/{job_id}/cancel")
@@ -529,7 +638,7 @@ async def cancel_export_job(job_id: str) -> dict[str, Any]:
     job = EXPORT_JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Export job not found or expired")
-    if job.status in {"completed", "failed", "cancelled"}:
+    if job.status in {"completed", "failed", "cancelled", "expired", "interrupted"}:
         return job_status_payload(job_id, job)
 
     job.cancel_requested = True

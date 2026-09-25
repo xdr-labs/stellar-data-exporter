@@ -127,3 +127,15 @@ details{border-top:1px solid #e5e1e2;padding-top:13px}summary{cursor:pointer;fon
 .csv-options{display:grid;grid-template-columns:minmax(140px,1fr) repeat(3,minmax(150px,1fr));gap:10px;align-items:center;margin:10px 0 14px;padding:11px 12px;border:1px solid #e5dfe1;border-radius:9px;background:#faf9f9}.csv-options label{margin:0}.csv-options select{font-family:inherit}
 @media(max-width:900px){.productivity-group{grid-template-columns:1fr}.productivity-controls{grid-template-columns:1fr 1fr auto auto auto}.history-controls{grid-template-columns:1fr auto auto auto}.csv-options{grid-template-columns:1fr 1fr}}
 @media(max-width:650px){.format-grid{grid-template-columns:1fr}.productivity-controls,.history-controls{grid-template-columns:1fr 1fr}.productivity-controls input,.productivity-controls select,.history-controls select{grid-column:1/-1}.custom-relative{grid-template-columns:64px 84px auto;margin-left:0}.csv-options{grid-template-columns:1fr}}
+
+.export-history-card{margin-top:2px}
+.history-header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.history-header .section-title{margin-bottom:12px}
+.history-table-wrap{max-height:360px}
+.history-status{display:inline-flex;align-items:center;border-radius:999px;padding:3px 7px;background:#eeebec;color:#615a5e;font-size:9px;font-weight:850;text-transform:uppercase;letter-spacing:.04em}
+.history-completed{background:#e9f7f0;color:#08764c}
+.history-failed{background:#fff0f2;color:#b32638}
+.history-cancelled,.history-expired,.history-interrupted{background:#fff7e5;color:#8a5a00}
+.history-running{background:#eef3ff;color:#3549a5}
+.history-pending{background:#f4f2f2;color:#5f595c}
+@media(max-width:650px){.history-header{align-items:stretch;flex-direction:column}.history-header .button{width:100%}.history-table-wrap{max-height:320px}}

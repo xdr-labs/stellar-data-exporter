@@ -1292,6 +1292,59 @@ async function pollExport(statusUrl) {
   }
 }
 
+function formatHistoryDate(epochSeconds) {
+  if (!epochSeconds) return "—";
+  return new Date(Number(epochSeconds) * 1000).toLocaleString();
+}
+
+function formatHistoryRange(summary = {}) {
+  if (!summary.start || !summary.end) return "—";
+  const start = new Date(summary.start);
+  const end = new Date(summary.end);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "—";
+  return `${start.toLocaleString()} → ${end.toLocaleString()}`;
+}
+
+function renderExportHistory(items) {
+  const body = $("exportHistoryBody");
+  if (!body) return;
+  if (!items.length) {
+    body.innerHTML = '<tr><td colspan="8" class="muted">No export jobs yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = items.map((item) => {
+    const summary = item.summary || {};
+    const sources = Array.isArray(summary.sources) ? summary.sources.join(", ") : "—";
+    const output = `${String(summary.format || "—").toUpperCase()}${summary.compress ? " + gzip" : ""}`;
+    const destination = String(summary.destination_type || "—").toUpperCase();
+    const result = item.error || item.result || "—";
+    const status = String(item.status || "unknown");
+    const created = formatHistoryDate(item.created_at);
+    const range = formatHistoryRange(summary);
+    return `<tr>
+      <td title="${escapeHtml(created)}">${escapeHtml(created)}</td>
+      <td><span class="history-status history-${escapeHtml(status)}">${escapeHtml(status)}</span></td>
+      <td title="${escapeHtml(sources)}">${escapeHtml(sources)}</td>
+      <td title="${escapeHtml(range)}">${escapeHtml(range)}</td>
+      <td>${escapeHtml(output)}</td>
+      <td>${escapeHtml(destination)}</td>
+      <td>${Number(item.records_exported || 0).toLocaleString()} / ${escapeHtml(humanBytes(item.bytes_sent || 0))}</td>
+      <td title="${escapeHtml(result)}">${escapeHtml(result)}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function loadExportHistory() {
+  const body = $("exportHistoryBody");
+  if (!body) return;
+  try {
+    const response = await api("/api/export/history?limit=50");
+    renderExportHistory(response.jobs || []);
+  } catch (error) {
+    body.innerHTML = `<tr><td colspan="8" class="status error">${escapeHtml(error.message)}</td></tr>`;
+  }
+}
+
 async function runExport() {
   const button = $("runExport");
   try {
@@ -1346,6 +1399,7 @@ async function runExport() {
     state.activeExport = null;
     $("cancelExport").disabled = true;
     setBusy(button, false);
+    await loadExportHistory();
   }
 }
 
@@ -1415,6 +1469,7 @@ function initialize() {
   $("copyCurl").addEventListener("click", () => copyInspectorText(buildRedactedCurl(), "cURL"));
   $("runExport").addEventListener("click", runExport);
   $("cancelExport").addEventListener("click", cancelExport);
+  $("refreshExportHistory").addEventListener("click", loadExportHistory);
   $("saveProfile").addEventListener("click", saveProfile);
   $("loadProfile").addEventListener("click", loadSelectedProfile);
   $("deleteProfile").addEventListener("click", deleteSelectedProfile);
@@ -1494,6 +1549,7 @@ function initialize() {
   setUiMode("basic");
   updateSummary();
   loadDataSources();
+  loadExportHistory();
 }
 
 initialize();

@@ -47,4 +47,5 @@ scenarios:
     command: "uv run --extra dev pytest -q"
     invariants:
       - "query time filters, record flattening, and adaptive slicing regressions pass"
+      - "persistent export history survives process-memory loss without persisting credentials or raw queries"
     release_gate: true

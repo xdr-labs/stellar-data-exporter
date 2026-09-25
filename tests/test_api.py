@@ -1,8 +1,11 @@
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+import app.main as main_app
+from app.job_store import JobStore
 from app.main import app
 from app.stellar import StellarClient
 
@@ -341,3 +344,50 @@ def test_ndjson_and_csv_advanced_options_flow_through_download_api(monkeypatch):
     assert csv_download.content.startswith(b"\xef\xbb\xbf")
     first_line = csv_download.content[3:].decode("utf-8").splitlines()[0]
     assert first_line.startswith("2026-09-25T00:00:00+00:00;80;")
+
+
+def test_persistent_export_history_survives_memory_reset_without_secrets(monkeypatch, tmp_path):
+    monkeypatch.setattr(StellarClient, "search", fake_search)
+    store_path = tmp_path / "history.sqlite3"
+    monkeypatch.setattr(main_app, "JOB_STORE", JobStore(store_path))
+    main_app.EXPORT_JOBS.clear()
+    client = TestClient(app)
+
+    request = {
+        **payload(),
+        "token": "api-token-must-not-persist",
+        "query": {"query": {"term": {"secret_field": "query-secret-must-not-persist"}}},
+        "format": "json",
+        "compress": False,
+        "filename": "persistent-history",
+    }
+    created = client.post("/api/export/jobs", json=request)
+    assert created.status_code == 200
+    body = created.json()
+    downloaded = client.get(body["download_url"])
+    assert downloaded.status_code == 200
+
+    history = client.get("/api/export/history?limit=10")
+    assert history.status_code == 200
+    jobs = history.json()["jobs"]
+    saved = next(item for item in jobs if item["job_id"] == body["job_id"])
+    assert saved["status"] == "completed"
+    assert saved["summary"]["destination_type"] == "download"
+    assert saved["summary"]["format"] == "json"
+    serialized = json.dumps(saved)
+    assert "api-token-must-not-persist" not in serialized
+    assert "query-secret-must-not-persist" not in serialized
+
+    main_app.EXPORT_JOBS.clear()
+    recovered = client.get(body["status_url"])
+    assert recovered.status_code == 200
+    assert recovered.json()["status"] == "completed"
+    assert recovered.json()["records_exported"] == 2
+
+    database_bytes = b"".join(
+        candidate.read_bytes()
+        for candidate in (store_path, Path(str(store_path) + "-wal"), Path(str(store_path) + "-shm"))
+        if candidate.exists()
+    )
+    assert b"api-token-must-not-persist" not in database_bytes
+    assert b"query-secret-must-not-persist" not in database_bytes
