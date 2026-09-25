@@ -1,18 +1,29 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import tempfile
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 from .destinations import test_s3, test_sftp, upload_s3, upload_sftp
-from .exporter import ExportEngine, csv_stream, gzip_stream, json_stream
+from .exporter import (
+    ExportEngine,
+    csv_stream,
+    file_stream,
+    gzip_stream,
+    iter_export_part_files,
+    json_stream,
+)
 from .models import (
     ConnectionInput,
     DestinationTestInput,
@@ -86,7 +97,7 @@ def safe_filename(name: str | None, fmt: str, compressed: bool) -> str:
     return candidate
 
 
-def build_output(payload: ExportInput):
+def build_export_source(payload: ExportInput):
     client = client_for(payload)
     engine = ExportEngine(
         client,
@@ -104,19 +115,37 @@ def build_output(payload: ExportInput):
     if isinstance(requested_source, list):
         preferred_fields = [str(field) for field in requested_source]
 
-    records = engine.iter_documents()
+    content_type = "text/csv" if payload.format == "csv" else "application/json"
+    filename = safe_filename(payload.filename, payload.format, payload.compress)
+    return engine.iter_documents(), preferred_fields, content_type, filename
+
+
+def build_output(payload: ExportInput):
+    records, preferred_fields, content_type, filename = build_export_source(payload)
     if payload.format == "csv":
         stream = csv_stream(records, preferred_fields)
-        content_type = "text/csv"
     else:
         stream = json_stream(records)
-        content_type = "application/json"
 
     if payload.compress:
         stream = gzip_stream(stream)
 
-    filename = safe_filename(payload.filename, payload.format, payload.compress)
     return stream, content_type, filename
+
+
+def build_output_parts(payload: ExportInput):
+    if payload.max_file_size_bytes is None:
+        raise ValueError("Split output requires max_file_size_bytes")
+    records, preferred_fields, content_type, filename = build_export_source(payload)
+    parts = iter_export_part_files(
+        records,
+        format=payload.format,
+        preferred_fields=preferred_fields,
+        compress=payload.compress,
+        base_filename=filename,
+        max_bytes=payload.max_file_size_bytes,
+    )
+    return parts, content_type, filename
 
 
 async def run_destination_job(job_id: str) -> None:
@@ -126,14 +155,17 @@ async def run_destination_job(job_id: str) -> None:
 
     payload = job.payload
     job.status = "running"
-    stream, content_type, filename = build_output(payload)
 
     def add_bytes(count: int) -> None:
         job.bytes_sent += count
 
-    try:
+    async def upload_one(
+        filename: str,
+        stream,
+        content_type: str,
+    ) -> str:
         if isinstance(payload.destination, S3Destination):
-            job.result = await upload_s3(
+            return await upload_s3(
                 payload.destination,
                 filename,
                 stream,
@@ -141,15 +173,41 @@ async def run_destination_job(job_id: str) -> None:
                 content_encoding="gzip" if payload.compress else None,
                 on_bytes=add_bytes,
             )
-        elif isinstance(payload.destination, SFTPDestination):
-            job.result = await upload_sftp(
+        if isinstance(payload.destination, SFTPDestination):
+            return await upload_sftp(
                 payload.destination,
                 filename,
                 stream,
                 on_bytes=add_bytes,
             )
+        raise RuntimeError("Unsupported background destination")
+
+    try:
+        if payload.max_file_size_bytes is None:
+            stream, content_type, filename = build_output(payload)
+            job.result = await upload_one(filename, stream, content_type)
         else:
-            raise RuntimeError("Unsupported background destination")
+            parts, content_type, _ = build_output_parts(payload)
+            results: list[str] = []
+            async for part in parts:
+                try:
+                    results.append(
+                        await upload_one(
+                            part.filename,
+                            file_stream(part.path),
+                            content_type,
+                        )
+                    )
+                finally:
+                    if os.path.exists(part.path):
+                        os.unlink(part.path)
+
+            if len(results) == 1:
+                job.result = results[0]
+            else:
+                job.result = (
+                    f"{len(results)} files: {results[0]} ... {results[-1]}"
+                )
         job.status = "completed"
     except Exception as exc:
         job.status = "failed"
@@ -305,7 +363,7 @@ async def export_job_status(job_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/export/jobs/{job_id}/download")
-async def download_export(job_id: str) -> StreamingResponse:
+async def download_export(job_id: str):
     cleanup_jobs()
     job = EXPORT_JOBS.pop(job_id, None)
     if job is None or job.payload is None:
@@ -314,7 +372,56 @@ async def download_export(job_id: str) -> StreamingResponse:
         raise HTTPException(status_code=400, detail="This job is not a browser download")
 
     payload = job.payload
-    stream, content_type, filename = build_output(payload)
-    media_type = "application/gzip" if payload.compress else content_type
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-    return StreamingResponse(stream, media_type=media_type, headers=headers)
+    if payload.max_file_size_bytes is None:
+        stream, content_type, filename = build_output(payload)
+        media_type = "application/gzip" if payload.compress else content_type
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        return StreamingResponse(stream, media_type=media_type, headers=headers)
+
+    parts, content_type, filename = build_output_parts(payload)
+    completed_parts = [part async for part in parts]
+
+    if len(completed_parts) == 1:
+        part = completed_parts[0]
+        media_type = "application/gzip" if payload.compress else content_type
+        return FileResponse(
+            part.path,
+            media_type=media_type,
+            filename=part.filename,
+            background=BackgroundTask(os.unlink, part.path),
+        )
+
+    archive = tempfile.NamedTemporaryFile(
+        prefix="stellar-export-",
+        suffix=".zip",
+        delete=False,
+    )
+    archive_path = archive.name
+    archive.close()
+
+    try:
+        with zipfile.ZipFile(
+            archive_path,
+            "w",
+            compression=zipfile.ZIP_STORED,
+        ) as bundle:
+            for part in completed_parts:
+                bundle.write(part.path, arcname=part.filename)
+    finally:
+        for part in completed_parts:
+            if os.path.exists(part.path):
+                os.unlink(part.path)
+
+    archive_name = re.sub(
+        r"(\.csv|\.json)(\.gz)?$",
+        "",
+        filename,
+        flags=re.IGNORECASE,
+    )
+    archive_name = f"{archive_name}-parts.zip"
+    return FileResponse(
+        archive_path,
+        media_type="application/zip",
+        filename=archive_name,
+        background=BackgroundTask(os.unlink, archive_path),
+    )

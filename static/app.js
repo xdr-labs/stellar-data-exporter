@@ -62,6 +62,48 @@ function selectedDestinationType() {
   return document.querySelector('input[name="destination"]:checked')?.value || "download";
 }
 
+function splitSizeBytes() {
+  if (!$("splitFiles").checked) return null;
+  const value = Number($("maxFileSizeValue").value);
+  const unit = $("maxFileSizeUnit").value;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("Max file size must be greater than 0.");
+  }
+  const multiplier = unit === "gb" ? 1024 * 1024 * 1024 : 1024 * 1024;
+  return Math.round(value * multiplier);
+}
+
+function outputFilename() {
+  const format = document.querySelector('input[name="format"]:checked')?.value || "csv";
+  const compressed = $("compress").checked;
+  let name = $("filename").value.trim() || "stellar-export";
+  if (name.toLowerCase().endsWith(".gz")) name = name.slice(0, -3);
+  if (!name.toLowerCase().endsWith(`.${format}`)) name += `.${format}`;
+  if (compressed) name += ".gz";
+  return name;
+}
+
+function numberedExample(filename) {
+  const lower = filename.toLowerCase();
+  const suffix = lower.endsWith(".csv.gz") ? ".csv.gz"
+    : lower.endsWith(".json.gz") ? ".json.gz"
+    : lower.endsWith(".csv") ? ".csv"
+    : lower.endsWith(".json") ? ".json"
+    : "";
+  const stem = suffix ? filename.slice(0, -suffix.length) : filename;
+  return `${stem}-0001${suffix} · ${stem}-0002${suffix} · …`;
+}
+
+function updateSplitUI() {
+  const enabled = $("splitFiles").checked;
+  $("maxFileSizeValue").disabled = !enabled;
+  $("maxFileSizeUnit").disabled = !enabled;
+  $("maxFileSizeLabel").classList.toggle("disabled-control", !enabled);
+  $("splitExample").classList.toggle("hidden", !enabled);
+  $("splitFilenameExample").textContent = numberedExample(outputFilename());
+  updateSummary();
+}
+
 function selectedSources() {
   return [...document.querySelectorAll('input[name="source"]:checked')].map((el) => el.value);
 }
@@ -112,7 +154,9 @@ function buildEffectiveQuery() {
 
 function renderEffectiveRequest() {
   const indices = selectedSourceIndices();
-  $("requestPath").textContent = `/connect/api/data/${indices.length ? indices.join(",") : "{select-data-source}"}/_search`;
+  const resolved = indices.length ? indices.join(",") : "No data source selected";
+  $("resolvedIndices").textContent = resolved;
+  $("requestPath").textContent = `/connect/api/data/${indices.length ? resolved : "{select-data-source}"}/_search`;
 
   try {
     $("effectiveDsl").value = JSON.stringify(buildEffectiveQuery(), null, 2);
@@ -313,6 +357,10 @@ function updateSummary() {
 
   const format = document.querySelector('input[name="format"]:checked')?.value || "csv";
   $("summaryOutput").textContent = `${format.toUpperCase()}${$("compress").checked ? " · gzip" : ""}`;
+  $("summarySplit").textContent = $("splitFiles").checked
+    ? `${$("maxFileSizeValue").value || "?"} ${$("maxFileSizeUnit").value.toUpperCase()} parts`
+    : "Single file";
+  $("splitFilenameExample").textContent = numberedExample(outputFilename());
   document.querySelectorAll(".choice").forEach((el) => {
     const radio = el.querySelector('input[name="format"]');
     el.classList.toggle("selected", !!radio?.checked);
@@ -437,6 +485,7 @@ async function runExport() {
       format: document.querySelector('input[name="format"]:checked')?.value || "csv",
       compress: $("compress").checked,
       filename: $("filename").value.trim() || "stellar-export",
+      max_file_size_bytes: splitSizeBytes(),
       destination: destinationPayload(),
     };
     const result = await api("/api/export/jobs", {
@@ -463,7 +512,11 @@ function renderSources(items) {
     const checked = item.id === "alerts" ? "checked" : "";
     return `<label class="source-option ${checked ? "selected" : ""}">
       <input type="checkbox" name="source" value="${escapeHtml(item.id)}" ${checked} />
-      <span><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.description)}</small></span>
+      <span>
+        <b>${escapeHtml(item.label)}</b>
+        <code class="source-index">${escapeHtml(item.index)}</code>
+        <small>${escapeHtml(item.description)}</small>
+      </span>
     </label>`;
   }).join("");
 
@@ -506,6 +559,7 @@ function initialize() {
   $("validateQuery").addEventListener("click", validateQuery);
   $("previewQuery").addEventListener("click", previewQuery);
   $("runExport").addEventListener("click", runExport);
+  $("splitFiles").addEventListener("change", updateSplitUI);
   $("selectAllSources").addEventListener("click", () => setAllSources(true));
   $("clearSources").addEventListener("click", () => setAllSources(false));
   $("sftpAuthMethod").addEventListener("change", updateSftpAuthUI);

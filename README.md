@@ -18,9 +18,11 @@ The first working slice is intentionally small:
 - adaptive time slicing for large ranges
 - streamed CSV or JSON output
 - optional gzip compression
-- browser download
+- optional max file size with numbered split files such as `export-0001.csv.gz`
+- browser download; multiple split parts are bundled as a ZIP
 - S3-compatible upload (AWS S3, Cloudflare R2, MinIO) with multipart streaming
 - SFTP upload with password or SSH private-key authentication
+- split S3/SFTP exports write each numbered part separately
 - in-memory background job status for remote destinations
 
 ## Data flow
@@ -67,17 +69,38 @@ the data API forces one immediate JWT refresh and retry.
 
 ## Run on dev-atlas
 
+The development server is served directly over HTTPS on port 8787.
+
+Create or refresh the development certificate:
+
 ```bash
 cd /home/aella/stellar-data-exporter
-uv sync --extra dev
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8787
+./scripts/generate-dev-cert.sh
 ```
 
-Health check:
+Start the HTTPS service:
 
 ```bash
-curl http://127.0.0.1:8787/api/health
+./scripts/run-dev-https.sh
 ```
+
+URLs:
+
+```text
+https://dev-atlas:8787
+https://221.139.249.116:8787
+```
+
+Health check for the current self-signed development certificate:
+
+```bash
+curl -k https://127.0.0.1:8787/api/health
+```
+
+The development certificate includes SAN entries for `dev-atlas`, `localhost`,
+`127.0.0.1`, and the current dev-atlas IP. It is self-signed, so browsers that do not
+trust the certificate will show a certificate warning. For an Internet-facing deployment,
+replace it with a certificate issued for the production DNS name by a trusted CA.
 
 ## Tests
 

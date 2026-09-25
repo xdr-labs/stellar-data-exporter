@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import csv
+import gzip
 import io
 import json
+import os
+import tempfile
 import zlib
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from .query import build_document_query, hit_source, total_hits
@@ -176,3 +182,183 @@ async def gzip_stream(source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
     tail = compressor.flush()
     if tail:
         yield tail
+
+
+@dataclass(frozen=True)
+class ExportPart:
+    path: str
+    filename: str
+    size_bytes: int
+
+
+def numbered_filename(filename: str, part_number: int) -> str:
+    path = Path(filename)
+    suffixes = path.suffixes
+    if len(suffixes) >= 2 and suffixes[-1] == ".gz":
+        suffix = "".join(suffixes[-2:])
+    elif suffixes:
+        suffix = suffixes[-1]
+    else:
+        suffix = ""
+    stem = filename[:-len(suffix)] if suffix else filename
+    return f"{stem}-{part_number:04d}{suffix}"
+
+
+class _PartWriter:
+    def __init__(self, *, compress: bool):
+        handle = tempfile.NamedTemporaryFile(prefix="stellar-export-", delete=False)
+        self.path = handle.name
+        self.raw = handle
+        self.stream = gzip.GzipFile(fileobj=handle, mode="wb") if compress else handle
+
+    def write(self, data: bytes) -> None:
+        self.stream.write(data)
+
+    def size(self) -> int:
+        self.stream.flush()
+        self.raw.flush()
+        return self.raw.tell()
+
+    def close(self) -> int:
+        if self.stream is not self.raw:
+            self.stream.close()
+        self.raw.close()
+        return os.path.getsize(self.path)
+
+
+async def _flattened_records(
+    buffered: list[dict[str, Any]],
+    records: AsyncIterator[dict[str, Any]],
+) -> AsyncIterator[dict[str, Any]]:
+    for record in buffered:
+        yield record
+    async for record in records:
+        yield flatten_record(record)
+
+
+async def iter_export_part_files(
+    records: AsyncIterator[dict[str, Any]],
+    *,
+    format: str,
+    preferred_fields: list[str] | None,
+    compress: bool,
+    base_filename: str,
+    max_bytes: int,
+) -> AsyncIterator[ExportPart]:
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be positive")
+
+    columns: list[str] = list(preferred_fields or [])
+    buffered_flat: list[dict[str, Any]] = []
+
+    if format == "csv":
+        async for record in records:
+            flat = flatten_record(record)
+            buffered_flat.append(flat)
+            if not columns:
+                columns = list(flat.keys())
+            else:
+                for key in flat:
+                    if key not in columns and len(buffered_flat) <= 100:
+                        columns.append(key)
+            if len(buffered_flat) >= 100:
+                break
+        source = _flattened_records(buffered_flat, records)
+    else:
+        source = records
+
+    part_number = 1
+    split_happened = False
+    writer: _PartWriter | None = None
+    json_first = True
+
+
+    def open_part() -> _PartWriter:
+        part = _PartWriter(compress=compress)
+        if format == "csv" and columns:
+            output = io.StringIO()
+            csv.DictWriter(output, fieldnames=columns).writeheader()
+            part.write(output.getvalue().encode("utf-8"))
+        elif format == "json":
+            part.write(b"[")
+        return part
+
+    async for record in source:
+        if writer is None:
+            writer = open_part()
+            json_first = True
+
+        if format == "csv":
+            output = io.StringIO()
+            csv.DictWriter(
+                output,
+                fieldnames=columns,
+                extrasaction="ignore",
+            ).writerow(record)
+            writer.write(output.getvalue().encode("utf-8"))
+        else:
+            if not json_first:
+                writer.write(b",")
+            writer.write(
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            json_first = False
+
+        if writer.size() >= max_bytes:
+            if format == "json":
+                writer.write(b"]")
+            size = writer.close()
+            split_happened = True
+            yield ExportPart(
+                path=writer.path,
+                filename=numbered_filename(base_filename, part_number),
+                size_bytes=size,
+            )
+            part_number += 1
+            writer = None
+
+    if writer is None:
+        if part_number == 1:
+            writer = open_part()
+            if format == "json":
+                writer.write(b"]")
+            size = writer.close()
+            yield ExportPart(
+                path=writer.path,
+                filename=base_filename,
+                size_bytes=size,
+            )
+        return
+
+    if format == "json":
+        writer.write(b"]")
+    size = writer.close()
+    yield ExportPart(
+        path=writer.path,
+        filename=(
+            numbered_filename(base_filename, part_number)
+            if split_happened
+            else base_filename
+        ),
+        size_bytes=size,
+    )
+
+
+async def file_stream(
+    path: str,
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> AsyncIterator[bytes]:
+    handle = open(path, "rb")
+    try:
+        while True:
+            chunk = await asyncio.to_thread(handle.read, chunk_size)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        handle.close()

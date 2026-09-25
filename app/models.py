@@ -91,4 +91,5 @@ class ExportInput(QueryInput):
     format: Literal["csv", "json"] = "csv"
     compress: bool = False
     filename: str | None = None
+    max_file_size_bytes: int | None = Field(default=None, ge=256)
     destination: Destination = Field(default_factory=DownloadDestination)
