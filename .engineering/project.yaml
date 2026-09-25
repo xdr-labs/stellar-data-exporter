@@ -4,7 +4,7 @@ engineering_system:
   baseline: "c16edb8c2a86f194f21c5ba16e5f75673a15ba5c"
   ci_mode: "shared"
   native_ci_workflows: []
-  merge_gate_status: "unknown"
+  merge_gate_status: "advisory"
 
 project:
   name: "stellar-data-exporter"
