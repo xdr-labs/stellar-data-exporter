@@ -1382,6 +1382,157 @@ async function loadExportHistory() {
   }
 }
 
+function formatScheduleDate(epochSeconds) {
+  if (!epochSeconds) return "—";
+  return new Date(Number(epochSeconds) * 1000).toLocaleString();
+}
+
+function renderSchedules(items) {
+  const body = $("scheduleBody");
+  if (!body) return;
+  if (!items.length) {
+    body.innerHTML = '<tr><td colspan="6" class="muted">No scheduled exports.</td></tr>';
+    return;
+  }
+  body.innerHTML = items.map((item) => {
+    const status = item.running ? "running" : (item.last_status || (item.enabled ? "waiting" : "paused"));
+    const statusDetail = item.last_error ? `${status}: ${item.last_error}` : status;
+    const toggleLabel = item.enabled ? "Pause" : "Enable";
+    return `<tr>
+      <td title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</td>
+      <td>Every ${Number(item.interval_minutes).toLocaleString()} min</td>
+      <td>${Number(item.window_minutes).toLocaleString()} min first run</td>
+      <td>${escapeHtml(item.enabled ? formatScheduleDate(item.next_run_at) : "Paused")}</td>
+      <td title="${escapeHtml(statusDetail)}"><span class="history-status history-${escapeHtml(status)}">${escapeHtml(status)}</span></td>
+      <td>
+        <div class="schedule-actions">
+          <button class="button secondary small schedule-run-now" type="button" data-id="${escapeHtml(item.schedule_id)}" ${item.running ? "disabled" : ""}>Run now</button>
+          <button class="button secondary small schedule-toggle" type="button" data-id="${escapeHtml(item.schedule_id)}" data-enabled="${item.enabled ? "true" : "false"}">${toggleLabel}</button>
+          <button class="button secondary small schedule-delete" type="button" data-id="${escapeHtml(item.schedule_id)}" ${item.running ? "disabled" : ""}>Delete</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join("");
+
+  body.querySelectorAll(".schedule-run-now").forEach((button) => {
+    button.addEventListener("click", () => runScheduleNow(button.dataset.id));
+  });
+  body.querySelectorAll(".schedule-toggle").forEach((button) => {
+    button.addEventListener("click", () => toggleSchedule(button.dataset.id, button.dataset.enabled === "true"));
+  });
+  body.querySelectorAll(".schedule-delete").forEach((button) => {
+    button.addEventListener("click", () => deleteSchedule(button.dataset.id));
+  });
+}
+
+async function loadSchedules() {
+  const body = $("scheduleBody");
+  if (!body) return [];
+  try {
+    const response = await api("/api/schedules");
+    const items = response.schedules || [];
+    renderSchedules(items);
+    return items;
+  } catch (error) {
+    body.innerHTML = `<tr><td colspan="6" class="status error">${escapeHtml(error.message)}</td></tr>`;
+    return [];
+  }
+}
+
+async function saveSchedule() {
+  const button = $("saveSchedule");
+  try {
+    setBusy(button, true, "Saving…");
+    const name = $("scheduleName").value.trim();
+    const interval = Number($("scheduleInterval").value);
+    const windowMinutes = Number($("scheduleWindow").value);
+    if (!name) throw new Error("Schedule name is required.");
+    if (!Number.isInteger(interval) || interval < 1) throw new Error("Schedule interval must be a positive whole number.");
+    if (!Number.isInteger(windowMinutes) || windowMinutes < 1) throw new Error("Schedule lookback window must be a positive whole number.");
+    const exportConfig = exportPayload();
+    if (exportConfig.destination.type === "download") {
+      throw new Error("Scheduled exports require an S3 or SFTP destination.");
+    }
+    exportConfig.overlap_policy = "reject";
+    const created = await api("/api/schedules", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        interval_minutes: interval,
+        window_minutes: windowMinutes,
+        enabled: $("scheduleEnabled").checked,
+        export: exportConfig,
+      }),
+    });
+    setStatus(
+      "scheduleStatus",
+      `Schedule saved securely. Next run: ${formatScheduleDate(created.next_run_at)}.`,
+      "success",
+    );
+    await loadSchedules();
+  } catch (error) {
+    setStatus("scheduleStatus", error.message, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function runScheduleNow(scheduleId) {
+  if (!scheduleId) return;
+  try {
+    await api(`/api/schedules/${encodeURIComponent(scheduleId)}/run`, {method: "POST"});
+    setStatus("scheduleStatus", "Scheduled export started…");
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await wait(500);
+      const items = await loadSchedules();
+      const current = items.find((item) => item.schedule_id === scheduleId);
+      if (!current) return;
+      if (!current.running) {
+        const type = current.last_status === "completed" ? "success" : "warning";
+        setStatus(
+          "scheduleStatus",
+          current.last_status === "completed"
+            ? "Scheduled export completed."
+            : `Scheduled export finished with status: ${current.last_status || "unknown"}.`,
+          type,
+        );
+        return;
+      }
+    }
+    setStatus("scheduleStatus", "Scheduled export is still running.", "warning");
+  } catch (error) {
+    setStatus("scheduleStatus", error.message, "error");
+    await loadSchedules();
+  }
+}
+
+async function toggleSchedule(scheduleId, enabled) {
+  try {
+    const updated = await api(`/api/schedules/${encodeURIComponent(scheduleId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({enabled: !enabled}),
+    });
+    setStatus(
+      "scheduleStatus",
+      updated.enabled ? "Schedule enabled." : "Schedule paused.",
+      "success",
+    );
+    await loadSchedules();
+  } catch (error) {
+    setStatus("scheduleStatus", error.message, "error");
+  }
+}
+
+async function deleteSchedule(scheduleId) {
+  try {
+    await api(`/api/schedules/${encodeURIComponent(scheduleId)}`, {method: "DELETE"});
+    setStatus("scheduleStatus", "Schedule deleted.", "success");
+    await loadSchedules();
+  } catch (error) {
+    setStatus("scheduleStatus", error.message, "error");
+  }
+}
+
 async function resumeExport(jobId, button) {
   if (!jobId) return;
   try {
@@ -1532,6 +1683,8 @@ function initialize() {
   $("runExport").addEventListener("click", runExport);
   $("cancelExport").addEventListener("click", cancelExport);
   $("refreshExportHistory").addEventListener("click", loadExportHistory);
+  $("refreshSchedules").addEventListener("click", loadSchedules);
+  $("saveSchedule").addEventListener("click", saveSchedule);
   $("saveProfile").addEventListener("click", saveProfile);
   $("loadProfile").addEventListener("click", loadSelectedProfile);
   $("deleteProfile").addEventListener("click", deleteSelectedProfile);
@@ -1613,6 +1766,7 @@ function initialize() {
   updateSummary();
   loadDataSources();
   loadExportHistory();
+  loadSchedules();
 }
 
 initialize();

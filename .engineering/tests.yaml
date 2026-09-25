@@ -50,4 +50,5 @@ scenarios:
       - "persistent export history survives process-memory loss without persisting credentials or raw queries"
       - "remote split-export checkpoints persist completed part hashes and resume skips only regenerated parts that exactly match saved checkpoints"
       - "stable document identities are deduplicated without source-hash fallback, and reject-overlap blocks only intersecting matching export pipelines while allowing adjacent ranges"
+      - "scheduled export payloads remain encrypted at rest, use remote destinations only, persist across restart, and advance contiguous windows only after successful runs"
     release_gate: true

@@ -408,6 +408,47 @@
         </details>
       </section>
 
+      <section class="card advanced-only schedule-card" id="scheduleCard">
+        <div class="history-header">
+          <div class="section-title">
+            <div>
+              <h2>Scheduled Export <span class="managed-badge">Optional</span></h2>
+              <p>Run the current query/output configuration repeatedly to S3 or SFTP.</p>
+            </div>
+          </div>
+          <button id="refreshSchedules" class="button secondary small" type="button">Refresh</button>
+        </div>
+        <div class="grid two schedule-settings">
+          <label>Schedule name
+            <input id="scheduleName" value="Scheduled export" maxlength="120" />
+          </label>
+          <label>Run every
+            <div class="size-input">
+              <input id="scheduleInterval" type="number" min="1" max="10080" value="60" />
+              <span class="input-unit">minutes</span>
+            </div>
+          </label>
+          <label>First-run lookback window
+            <div class="size-input">
+              <input id="scheduleWindow" type="number" min="1" max="43200" value="60" />
+              <span class="input-unit">minutes</span>
+            </div>
+          </label>
+          <label class="check large"><input id="scheduleEnabled" type="checkbox" checked /> Enabled after save</label>
+        </div>
+        <div class="row between wrap">
+          <p class="hint">Schedules require S3/SFTP. Query and credentials are encrypted at rest; scheduled runs always reject matching overlap and continue from the last successful window.</p>
+          <button id="saveSchedule" class="button primary" type="button">Save schedule</button>
+        </div>
+        <div id="scheduleStatus" class="status hidden"></div>
+        <div class="table-wrap schedule-table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Cadence</th><th>Window</th><th>Next</th><th>Last status</th><th>Actions</th></tr></thead>
+            <tbody id="scheduleBody"><tr><td colspan="6" class="muted">Loading schedules…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="card final-action-card">
         <div class="final-action-copy">
           <div class="section-title final-title">

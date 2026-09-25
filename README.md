@@ -31,6 +31,7 @@ The first working slice is intentionally small:
 - resume/retry for failed, cancelled, or restart-interrupted remote jobs; verified completed split parts are skipped and credentials are re-entered rather than persisted
 - record-level duplicate suppression only when Stellar/Elasticsearch returns a stable `_index` + `_id`; records without stable identity are preserved to avoid false data loss
 - explicit overlap policy for matching export pipelines: manual exports default to `allow`, while Advanced mode can `reject` intersecting time ranges; adjacent half-open ranges remain valid
+- optional scheduled S3/SFTP exports with encrypted-at-rest query/account/destination configuration, Run now/Pause/Enable/Delete controls, timestamped output filenames, and contiguous windows from the last successful run
 - relative time presets (15m, 1h, 24h, 7d) plus custom relative ranges
 - saved export profiles in browser localStorage with credentials explicitly excluded
 - browser-local query history and favorites
@@ -73,6 +74,8 @@ wildcards spanning more than 24 hours.
 - never expose the service directly to the public Internet in its current development state
 
 Persistent job history defaults to `.data/export-jobs.sqlite3` with owner-only file permissions. Set `STELLAR_EXPORTER_JOB_DB` to override the database path. The store contains sanitized job metadata, resume fingerprint, completed-part checkpoints, and progress/result fields only; executable payloads and credentials remain memory-only. Split remote exports resume at verified part boundaries. A non-split remote job has no completed part boundary, so Resume retries that single file from the beginning.
+
+Scheduled exports use a separate `.data/export-schedules.sqlite3` store plus `.data/schedule.key`, both owner-only (`0600`). The full scheduled export payload — including query, Stellar account token, and S3/SFTP credentials — is Fernet-encrypted before it is written. For production, inject the master key through `STELLAR_EXPORTER_SCHEDULE_KEY`; `STELLAR_EXPORTER_SCHEDULE_DB`, `STELLAR_EXPORTER_SCHEDULE_KEY_FILE`, and `STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS` override the default paths/poll interval. Scheduled exports support S3/SFTP only, always use overlap rejection, and continue the next successful window from the previous success end so scheduler delays do not create gaps.
 
 ## Stellar Cyber API authentication
 
@@ -134,5 +137,5 @@ P2 operationalization, after one-shot export is stable:
 1. persistent job store and export history without plaintext credentials — implemented
 2. checkpoint/resume and retry-from-checkpoint for remote destinations — implemented at durable split-part boundaries; non-split retries from the beginning
 3. overlap/dedup strategy for resumed or scheduled exports — implemented with half-open ranges, stable document-identity dedup, and explicit allow/reject overlap policy
-4. optional scheduled exports with encrypted credential persistence
+4. optional scheduled exports with encrypted credential persistence — implemented for S3/SFTP with protected payload storage, contiguous windows, manual Run now, Pause/Enable, Delete, and restart persistence
 5. production hardening: reverse proxy, access boundary, rate limits, deployment/runbook

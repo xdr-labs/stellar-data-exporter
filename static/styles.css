@@ -139,3 +139,13 @@ details{border-top:1px solid #e5e1e2;padding-top:13px}summary{cursor:pointer;fon
 .history-running{background:#eef3ff;color:#3549a5}
 .history-pending{background:#f4f2f2;color:#5f595c}
 @media(max-width:650px){.history-header{align-items:stretch;flex-direction:column}.history-header .button{width:100%}.history-table-wrap{max-height:320px}}
+
+.schedule-card{margin-top:2px}
+.schedule-settings{margin:4px 0 12px}
+.input-unit{display:flex;align-items:center;justify-content:center;border:1px solid #d2cdcf;border-radius:8px;background:#f7f5f6;color:var(--muted);font-size:10px;font-weight:800}
+.schedule-table-wrap{max-height:320px;margin-top:14px}
+.schedule-actions{display:flex;gap:6px;align-items:center}
+.history-waiting{background:#eef3ff;color:#3549a5}
+.history-paused{background:#f4f2f2;color:#5f595c}
+.history-blocked{background:#fff7e5;color:#8a5a00}
+@media(max-width:650px){.schedule-settings{grid-template-columns:1fr}.schedule-actions{flex-wrap:wrap}.schedule-actions .button{flex:1}}

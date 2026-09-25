@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
 import time
 import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -44,10 +47,13 @@ from .models import (
     IndexPlanInput,
     QueryInput,
     S3Destination,
+    ScheduleCreateInput,
+    ScheduleUpdateInput,
     SFTPDestination,
 )
 from .index_planner import plan_indices
 from .job_store import JobStore
+from .schedule_store import ScheduleCipher, ScheduleStore
 from .query import build_document_query, compile_user_query, hit_source, total_hits
 from .sources import resolve_indices, source_catalog, source_labels
 from .stellar import (
@@ -64,8 +70,27 @@ STATIC_DIR = BASE_DIR / "static"
 DOWNLOAD_JOB_TTL_SECONDS = 600
 HISTORY_JOB_TTL_SECONDS = 3600
 JOB_DB_PATH = Path(os.environ.get("STELLAR_EXPORTER_JOB_DB", str(BASE_DIR / ".data" / "export-jobs.sqlite3")))
+SCHEDULE_DB_PATH = Path(
+    os.environ.get(
+        "STELLAR_EXPORTER_SCHEDULE_DB",
+        str(BASE_DIR / ".data" / "export-schedules.sqlite3"),
+    )
+)
+SCHEDULE_KEY_PATH = Path(
+    os.environ.get(
+        "STELLAR_EXPORTER_SCHEDULE_KEY_FILE",
+        str(BASE_DIR / ".data" / "schedule.key"),
+    )
+)
+SCHEDULE_POLL_SECONDS = max(
+    1.0,
+    float(os.environ.get("STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS", "30")),
+)
 JOB_STORE = JobStore(JOB_DB_PATH)
 JOB_STORE.recover_interrupted()
+SCHEDULE_STORE = ScheduleStore(SCHEDULE_DB_PATH)
+SCHEDULE_CIPHER = ScheduleCipher.from_environment(SCHEDULE_KEY_PATH)
+LOGGER = logging.getLogger("stellar-data-exporter")
 
 
 @dataclass
@@ -94,7 +119,28 @@ class ExportJob:
 
 
 EXPORT_JOBS: dict[str, ExportJob] = {}
-app = FastAPI(title="Stellar Data Exporter", version="0.1.0")
+ACTIVE_SCHEDULE_RUNS: dict[str, asyncio.Task] = {}
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    loop_task = asyncio.create_task(schedule_loop())
+    try:
+        yield
+    finally:
+        loop_task.cancel()
+        try:
+            await loop_task
+        except asyncio.CancelledError:
+            pass
+        active = list(ACTIVE_SCHEDULE_RUNS.values())
+        for task in active:
+            task.cancel()
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
+
+
+app = FastAPI(title="Stellar Data Exporter", version="0.1.0", lifespan=lifespan)
 
 
 def client_for(
@@ -267,14 +313,15 @@ def checkpoint_destination_result(
 
 def validate_resume_payload(record: dict[str, Any], payload: ExportInput) -> None:
     expected = record.get("metadata") or {}
-    actual = sanitized_export_metadata(payload)
-    if actual != expected:
+    expected_fingerprint = expected.get("resume_fingerprint")
+    actual_fingerprint = resume_fingerprint(payload)
+    if not expected_fingerprint or actual_fingerprint != expected_fingerprint:
         raise HTTPException(
             status_code=409,
             detail=(
                 "Resume settings do not match the original export. "
-                "Use the same source, time range, query mode, output, split, field count, "
-                "and destination type."
+                "Use the same source, time range, query, output, split, fields, "
+                "and destination target."
             ),
         )
     if isinstance(payload.destination, DownloadDestination):
@@ -659,6 +706,247 @@ async def run_destination_job(job_id: str) -> None:
         job.task = None
 
 
+def schedule_public_payload(schedule: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schedule_id": schedule["schedule_id"],
+        "name": schedule["name"],
+        "created_at": schedule["created_at"],
+        "updated_at": schedule["updated_at"],
+        "enabled": bool(schedule["enabled"]),
+        "interval_minutes": schedule["interval_minutes"],
+        "window_minutes": schedule["window_minutes"],
+        "next_run_at": schedule["next_run_at"],
+        "last_run_at": schedule.get("last_run_at"),
+        "last_success_end": schedule.get("last_success_end"),
+        "last_job_id": schedule.get("last_job_id"),
+        "last_status": schedule.get("last_status"),
+        "last_error": schedule.get("last_error"),
+        "running": schedule["schedule_id"] in ACTIVE_SCHEDULE_RUNS,
+    }
+
+
+def encrypt_schedule_export(payload: ExportInput) -> bytes:
+    return SCHEDULE_CIPHER.encrypt(payload.model_dump_json().encode("utf-8"))
+
+
+def decrypt_schedule_export(schedule: dict[str, Any]) -> ExportInput:
+    ciphertext = schedule.get("encrypted_payload")
+    if not isinstance(ciphertext, (bytes, bytearray)):
+        raise RuntimeError("Scheduled export payload is missing")
+    plaintext = SCHEDULE_CIPHER.decrypt(bytes(ciphertext))
+    return ExportInput.model_validate_json(plaintext)
+
+
+def parse_schedule_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def scheduled_filename(payload: ExportInput, end: datetime) -> str:
+    filename = safe_filename(payload.filename, payload.format, payload.compress)
+    path = Path(filename)
+    suffixes = path.suffixes
+    if len(suffixes) >= 2 and suffixes[-1].lower() == ".gz":
+        suffix = "".join(suffixes[-2:])
+    elif suffixes:
+        suffix = suffixes[-1]
+    else:
+        suffix = ""
+    stem = filename[:-len(suffix)] if suffix else filename
+    stamp = end.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stem}-{stamp}{suffix}"
+
+
+def schedule_error_text(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict):
+            return str(detail.get("message") or detail)
+        return str(detail)
+    return str(exc)
+
+
+async def execute_schedule(
+    schedule_id: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    schedule = SCHEDULE_STORE.get(schedule_id, include_ciphertext=True)
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Scheduled export not found")
+
+    template = decrypt_schedule_export(schedule)
+    if isinstance(template.destination, DownloadDestination):
+        raise RuntimeError("Scheduled exports require an S3 or SFTP destination")
+
+    run_end = (now or datetime.now(UTC)).astimezone(UTC)
+    last_job_id = schedule.get("last_job_id")
+    if last_job_id:
+        previous = JOB_STORE.get(last_job_id)
+        if previous and resumable_status(
+            previous["status"],
+            previous.get("metadata") or {},
+        ):
+            metadata = previous.get("metadata") or {}
+            payload = template.model_copy(
+                update={
+                    "start": parse_schedule_time(metadata["start"]),
+                    "end": parse_schedule_time(metadata["end"]),
+                    "filename": metadata["filename"],
+                    "overlap_policy": "reject",
+                }
+            )
+            try:
+                resumed = await resume_export_job(last_job_id, payload)
+                job = EXPORT_JOBS[last_job_id]
+                job.metadata["schedule_id"] = schedule_id
+                job.metadata["schedule_name"] = schedule["name"]
+                persist_job(job, force=True)
+                if job.task is not None:
+                    await job.task
+                status = job.status
+                success_end = payload.end.isoformat() if status == "completed" else None
+                SCHEDULE_STORE.record_result(
+                    schedule_id,
+                    job_id=last_job_id,
+                    status=status,
+                    last_success_end=success_end,
+                    error=job.error,
+                )
+                return {
+                    "schedule_id": schedule_id,
+                    "job_id": last_job_id,
+                    "status": status,
+                    "resumed": True,
+                    "resumed_from_parts": resumed["resumed_from_parts"],
+                }
+            except Exception as exc:
+                error = schedule_error_text(exc)
+                SCHEDULE_STORE.record_result(
+                    schedule_id,
+                    job_id=last_job_id,
+                    status="failed",
+                    error=error,
+                )
+                return {
+                    "schedule_id": schedule_id,
+                    "job_id": last_job_id,
+                    "status": "failed",
+                    "error": error,
+                    "resumed": True,
+                }
+
+    last_success_end = schedule.get("last_success_end")
+    if last_success_end:
+        run_start = parse_schedule_time(last_success_end)
+        if run_start >= run_end:
+            return {
+                "schedule_id": schedule_id,
+                "job_id": None,
+                "status": "no_new_window",
+            }
+    else:
+        run_start = run_end - timedelta(minutes=int(schedule["window_minutes"]))
+
+    payload = template.model_copy(
+        update={
+            "start": run_start,
+            "end": run_end,
+            "filename": scheduled_filename(template, run_end),
+            "overlap_policy": "reject",
+        }
+    )
+
+    try:
+        created = await create_export_job(payload)
+        job_id = created["job_id"]
+        job = EXPORT_JOBS[job_id]
+        job.metadata["schedule_id"] = schedule_id
+        job.metadata["schedule_name"] = schedule["name"]
+        persist_job(job, force=True)
+        if job.task is not None:
+            await job.task
+        status = job.status
+        success_end = run_end.isoformat() if status == "completed" else None
+        SCHEDULE_STORE.record_result(
+            schedule_id,
+            job_id=job_id,
+            status=status,
+            last_success_end=success_end,
+            error=job.error,
+        )
+        return {
+            "schedule_id": schedule_id,
+            "job_id": job_id,
+            "status": status,
+            "resumed": False,
+            "start": run_start.isoformat(),
+            "end": run_end.isoformat(),
+        }
+    except Exception as exc:
+        error = schedule_error_text(exc)
+        SCHEDULE_STORE.record_result(
+            schedule_id,
+            job_id=None,
+            status="blocked" if isinstance(exc, HTTPException) and exc.status_code == 409 else "failed",
+            error=error,
+        )
+        return {
+            "schedule_id": schedule_id,
+            "job_id": None,
+            "status": "blocked" if isinstance(exc, HTTPException) and exc.status_code == 409 else "failed",
+            "error": error,
+            "resumed": False,
+        }
+
+
+async def _schedule_run_guarded(schedule_id: str) -> None:
+    try:
+        await execute_schedule(schedule_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        LOGGER.exception("Scheduled export %s failed unexpectedly", schedule_id)
+    finally:
+        ACTIVE_SCHEDULE_RUNS.pop(schedule_id, None)
+
+
+def start_schedule_run(schedule_id: str) -> asyncio.Task:
+    existing = ACTIVE_SCHEDULE_RUNS.get(schedule_id)
+    if existing is not None and not existing.done():
+        raise HTTPException(status_code=409, detail="Scheduled export is already running")
+    task = asyncio.create_task(_schedule_run_guarded(schedule_id))
+    ACTIVE_SCHEDULE_RUNS[schedule_id] = task
+    return task
+
+
+async def run_due_schedules_once(now: float | None = None) -> list[str]:
+    current = time.time() if now is None else now
+    started: list[str] = []
+    for schedule in SCHEDULE_STORE.due(current):
+        schedule_id = schedule["schedule_id"]
+        if schedule_id in ACTIVE_SCHEDULE_RUNS:
+            continue
+        next_run = current + int(schedule["interval_minutes"]) * 60
+        SCHEDULE_STORE.reserve_next_run(schedule_id, next_run)
+        start_schedule_run(schedule_id)
+        started.append(schedule_id)
+    return started
+
+
+async def schedule_loop() -> None:
+    while True:
+        try:
+            await run_due_schedules_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("Scheduled export loop iteration failed")
+        await asyncio.sleep(SCHEDULE_POLL_SECONDS)
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -786,6 +1074,86 @@ async def preview(payload: QueryInput) -> dict[str, Any]:
         "fields": discover_fields(rows),
         "warnings": warnings,
         "index_plan": index_plan_result.as_dict(),
+    }
+
+
+@app.get("/api/schedules")
+async def list_schedules() -> dict[str, Any]:
+    return {
+        "schedules": [
+            schedule_public_payload(schedule)
+            for schedule in SCHEDULE_STORE.list()
+        ]
+    }
+
+
+@app.post("/api/schedules")
+async def create_schedule(payload: ScheduleCreateInput) -> dict[str, Any]:
+    schedule_id = uuid.uuid4().hex
+    encrypted = encrypt_schedule_export(payload.export)
+    schedule = SCHEDULE_STORE.create(
+        schedule_id=schedule_id,
+        name=payload.name.strip(),
+        interval_minutes=payload.interval_minutes,
+        window_minutes=payload.window_minutes,
+        next_run_at=time.time() + payload.interval_minutes * 60,
+        encrypted_payload=encrypted,
+        enabled=payload.enabled,
+    )
+    return schedule_public_payload(schedule)
+
+
+@app.patch("/api/schedules/{schedule_id}")
+async def update_schedule(
+    schedule_id: str,
+    payload: ScheduleUpdateInput,
+) -> dict[str, Any]:
+    current = SCHEDULE_STORE.get(schedule_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Scheduled export not found")
+
+    interval = payload.interval_minutes or current["interval_minutes"]
+    next_run_at = None
+    if payload.interval_minutes is not None or payload.enabled is True:
+        next_run_at = time.time() + interval * 60
+
+    updated = SCHEDULE_STORE.update(
+        schedule_id,
+        enabled=payload.enabled,
+        name=payload.name.strip() if payload.name is not None else None,
+        interval_minutes=payload.interval_minutes,
+        window_minutes=payload.window_minutes,
+        next_run_at=next_run_at,
+    )
+    return schedule_public_payload(updated)
+
+
+@app.delete("/api/schedules/{schedule_id}")
+async def delete_schedule(schedule_id: str) -> dict[str, bool]:
+    task = ACTIVE_SCHEDULE_RUNS.get(schedule_id)
+    if task is not None and not task.done():
+        raise HTTPException(
+            status_code=409,
+            detail="Scheduled export is running and cannot be deleted",
+        )
+    if not SCHEDULE_STORE.delete(schedule_id):
+        raise HTTPException(status_code=404, detail="Scheduled export not found")
+    return {"deleted": True}
+
+
+@app.post("/api/schedules/{schedule_id}/run")
+async def run_schedule_now(schedule_id: str) -> dict[str, Any]:
+    schedule = SCHEDULE_STORE.get(schedule_id)
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Scheduled export not found")
+    SCHEDULE_STORE.reserve_next_run(
+        schedule_id,
+        time.time() + int(schedule["interval_minutes"]) * 60,
+    )
+    start_schedule_run(schedule_id)
+    return {
+        **schedule_public_payload(SCHEDULE_STORE.get(schedule_id)),
+        "running": True,
     }
 
 

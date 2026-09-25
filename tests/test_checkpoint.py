@@ -267,3 +267,16 @@ def test_resume_fingerprint_is_secret_free():
     assert "stellar-secret" not in serialized
     assert "access-secret" not in serialized
     assert "secret-secret" not in serialized
+
+
+def test_resume_validation_allows_non_identity_history_annotations():
+    payload = remote_payload()
+    record = {
+        "metadata": {
+            **sanitized_export_metadata(payload),
+            "schedule_id": "schedule-1",
+            "schedule_name": "Scheduled alerts",
+        },
+        "completed_parts": [],
+    }
+    main_app.validate_resume_payload(record, payload)

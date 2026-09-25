@@ -132,3 +132,38 @@ class ExportInput(QueryInput):
         if not normalized:
             raise ValueError("selected_fields must contain at least one field")
         return normalized
+
+
+class ScheduleCreateInput(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    interval_minutes: int = Field(ge=1, le=10080)
+    window_minutes: int = Field(ge=1, le=43200)
+    enabled: bool = True
+    export: ExportInput
+
+    @model_validator(mode="after")
+    def validate_remote_destination(self):
+        if isinstance(self.export.destination, DownloadDestination):
+            raise ValueError("Scheduled exports require an S3 or SFTP destination")
+        return self
+
+
+class ScheduleUpdateInput(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    interval_minutes: int | None = Field(default=None, ge=1, le=10080)
+    window_minutes: int | None = Field(default=None, ge=1, le=43200)
+    enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self):
+        if all(
+            value is None
+            for value in (
+                self.name,
+                self.interval_minutes,
+                self.window_minutes,
+                self.enabled,
+            )
+        ):
+            raise ValueError("At least one schedule field must be updated")
+        return self
