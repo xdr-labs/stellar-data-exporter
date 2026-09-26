@@ -106,40 +106,18 @@ def test_query_and_export_require_tenant_selection():
     assert "tenant_id" in response.text
 
 
-def test_saved_stellar_connection_is_encrypted_and_round_trips():
+def test_server_does_not_expose_shared_connection_settings():
     client = TestClient(app)
-    client.delete("/api/settings/stellar-connection")
     payload = {
         "host": "https://stellar.example.test",
         "auth_mode": "user_scope",
         "email": None,
-        "token": "saved-user-api-key",
+        "token": "must-remain-browser-session-only",
         "verify_tls": True,
         "tenant_id": "tenant-42",
         "tenant_name": "Tenant 42",
     }
 
-    saved = client.put("/api/settings/stellar-connection", json=payload)
-    assert saved.status_code == 200
-    assert saved.json()["saved"] is True
-
-    raw = main_app.CONNECTION_SETTINGS_PATH.read_bytes()
-    assert b"saved-user-api-key" not in raw
-    assert b"tenant-42" not in raw
-    assert main_app.CONNECTION_SETTINGS_PATH.stat().st_mode & 0o777 == 0o600
-
-    loaded = client.get("/api/settings/stellar-connection")
-    assert loaded.status_code == 200
-    connection = loaded.json()["connection"]
-    assert connection["auth_mode"] == "user_scope"
-    assert connection["token"] == "saved-user-api-key"
-    assert connection["tenant_id"] == "tenant-42"
-    assert connection["tenant_name"] == "Tenant 42"
-
-    deleted = client.delete("/api/settings/stellar-connection")
-    assert deleted.status_code == 200
-    assert deleted.json()["deleted"] is True
-    assert client.get("/api/settings/stellar-connection").json() == {
-        "saved": False,
-        "connection": None,
-    }
+    assert client.get("/api/settings/stellar-connection").status_code == 404
+    assert client.put("/api/settings/stellar-connection", json=payload).status_code == 404
+    assert client.delete("/api/settings/stellar-connection").status_code == 404

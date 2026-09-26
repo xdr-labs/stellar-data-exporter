@@ -144,6 +144,23 @@ async def upload_s3(
     return f"s3://{destination.bucket}/{key}"
 
 
+def sftp_known_hosts_entry(host: str, port: int, public_key: str) -> str:
+    target = host if port == 22 else f"[{host}]:{port}"
+    return f"{target} {public_key.strip()}"
+
+
+async def get_sftp_host_key(host: str, port: int) -> dict[str, str]:
+    key = await asyncssh.get_server_host_key(host, port)
+    if key is None:
+        raise RuntimeError("The SFTP server did not present an SSH host key.")
+    public_key = key.export_public_key("openssh").decode("utf-8").strip()
+    return {
+        "algorithm": key.algorithm.decode("ascii") if isinstance(key.algorithm, bytes) else str(key.algorithm),
+        "fingerprint": key.get_fingerprint("sha256"),
+        "public_key": public_key,
+    }
+
+
 def _sftp_connect_kwargs(destination: SFTPDestination) -> dict:
     kwargs = {
         "host": destination.host,
@@ -153,6 +170,13 @@ def _sftp_connect_kwargs(destination: SFTPDestination) -> dict:
 
     if not destination.verify_host_key:
         kwargs["known_hosts"] = None
+    elif destination.server_host_key:
+        entry = sftp_known_hosts_entry(
+            destination.host,
+            destination.port,
+            destination.server_host_key,
+        )
+        kwargs["known_hosts"] = asyncssh.import_known_hosts(entry)
 
     if destination.auth_method == "password":
         kwargs["password"] = destination.password
@@ -167,9 +191,15 @@ def _sftp_connect_kwargs(destination: SFTPDestination) -> dict:
 
 
 async def test_sftp(destination: SFTPDestination) -> None:
-    async with asyncssh.connect(**_sftp_connect_kwargs(destination)) as connection:
-        async with connection.start_sftp_client() as sftp:
-            await sftp.stat(destination.remote_path)
+    try:
+        async with asyncssh.connect(**_sftp_connect_kwargs(destination)) as connection:
+            async with connection.start_sftp_client() as sftp:
+                await sftp.stat(destination.remote_path)
+    except asyncssh.HostKeyNotVerifiable as exc:
+        raise RuntimeError(
+            "SSH host key is not trusted. Use Get host key, verify the SHA256 fingerprint "
+            "with the SFTP server administrator, trust that key, and test again."
+        ) from exc
 
 
 async def upload_sftp(

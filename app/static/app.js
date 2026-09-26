@@ -20,10 +20,13 @@ const state = {
   savedTenantId: "",
   savedTenantName: "",
   savedConnectionExists: false,
+  sftpHostKeyCandidate: null,
+  sftpTrustedHostKey: null,
 };
 
 const PROFILE_STORAGE_KEY = "stellarDataExporter.profiles.v1";
 const QUERY_HISTORY_STORAGE_KEY = "stellarDataExporter.queryHistory.v1";
+const CONNECTION_SESSION_STORAGE_KEY = "stellarDataExporter.connectionSession.v1";
 
 function isoFromLocal(value) {
   if (!value) return null;
@@ -215,7 +218,7 @@ function renderTenants(tenants) {
   if (state.savedTenantId && !restoredTenant) {
     setStatus(
       "savedConnectionStatus",
-      "Saved connection loaded, but its tenant is no longer accessible with this credential. Select another tenant and save again.",
+      "Browser-session connection restored, but its tenant is no longer accessible with this credential. Select another tenant and remember the session again.",
       "warning",
     );
     state.savedTenantId = "";
@@ -731,6 +734,81 @@ function basePayload() {
   };
 }
 
+function sftpEndpointIdentity() {
+  return {
+    host: $("sftpHost").value.trim(),
+    port: Number($("sftpPort").value || 22),
+  };
+}
+
+function sameSftpEndpoint(entry) {
+  if (!entry) return false;
+  const current = sftpEndpointIdentity();
+  return entry.host === current.host && Number(entry.port) === current.port;
+}
+
+function clearSftpHostKeyState(message = "") {
+  state.sftpHostKeyCandidate = null;
+  state.sftpTrustedHostKey = null;
+  $("sftpHostKeyPanel").classList.add("hidden");
+  $("sftpHostKeyAlgorithm").textContent = "—";
+  $("sftpHostKeyFingerprint").textContent = "—";
+  if (message) {
+    setStatus("sftpHostKeyStatus", message, "warning");
+  } else {
+    $("sftpHostKeyStatus").className = "status hidden";
+    $("sftpHostKeyStatus").textContent = "";
+  }
+}
+
+async function getSftpHostKey() {
+  const button = $("getSftpHostKey");
+  try {
+    const endpoint = sftpEndpointIdentity();
+    if (!endpoint.host) throw new Error("Enter the SFTP host first.");
+    setBusy(button, true, "Fetching…");
+    setStatus("sftpHostKeyStatus", "Fetching the SSH host key…");
+    const result = await api("/api/destination/sftp-host-key", {
+      method: "POST",
+      body: JSON.stringify(endpoint),
+    });
+    state.sftpHostKeyCandidate = {
+      host: endpoint.host,
+      port: endpoint.port,
+      algorithm: result.algorithm,
+      fingerprint: result.fingerprint,
+      publicKey: result.public_key,
+    };
+    state.sftpTrustedHostKey = null;
+    $("sftpHostKeyAlgorithm").textContent = result.algorithm || "—";
+    $("sftpHostKeyFingerprint").textContent = result.fingerprint || "—";
+    $("sftpHostKeyPanel").classList.remove("hidden");
+    setStatus(
+      "sftpHostKeyStatus",
+      "Compare this SHA256 fingerprint with the SFTP server administrator. If it matches, click Trust this host key.",
+      "warning",
+    );
+  } catch (error) {
+    clearSftpHostKeyState();
+    setStatus("sftpHostKeyStatus", error.message, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function trustSftpHostKey() {
+  if (!state.sftpHostKeyCandidate || !sameSftpEndpoint(state.sftpHostKeyCandidate)) {
+    setStatus("sftpHostKeyStatus", "Fetch the current server host key first.", "warning");
+    return;
+  }
+  state.sftpTrustedHostKey = {...state.sftpHostKeyCandidate};
+  setStatus(
+    "sftpHostKeyStatus",
+    "Trusted " + state.sftpTrustedHostKey.fingerprint + " for this SFTP destination.",
+    "success",
+  );
+}
+
 function destinationPayload() {
   const type = selectedDestinationType();
   if (type === "download") return {type: "download"};
@@ -760,6 +838,10 @@ function destinationPayload() {
   if (authMethod === "private_key" && !$("sftpPrivateKey").value.trim()) {
     throw new Error("SFTP private key is required.");
   }
+  const verifyHostKey = $("sftpVerifyHostKey").checked;
+  if (verifyHostKey && (!state.sftpTrustedHostKey || !sameSftpEndpoint(state.sftpTrustedHostKey))) {
+    throw new Error("Trust the current SFTP SSH host key before testing or exporting.");
+  }
   return {
     type: "sftp",
     host: $("sftpHost").value.trim(),
@@ -769,7 +851,8 @@ function destinationPayload() {
     password: authMethod === "password" ? $("sftpPassword").value : null,
     private_key: authMethod === "private_key" ? $("sftpPrivateKey").value : null,
     remote_path: $("sftpRemotePath").value.trim() || "/",
-    verify_host_key: $("sftpVerifyHostKey").checked,
+    verify_host_key: verifyHostKey,
+    server_host_key: verifyHostKey ? state.sftpTrustedHostKey.publicKey : null,
   };
 }
 
@@ -963,6 +1046,11 @@ function applyProfileSettings(settings) {
     $("sftpAuthMethod").value = destination.auth_method || "private_key";
     $("sftpRemotePath").value = destination.remote_path || "/";
     $("sftpVerifyHostKey").checked = destination.verify_host_key !== false;
+    clearSftpHostKeyState(
+      $("sftpVerifyHostKey").checked
+        ? "SFTP profile loaded. Fetch and trust the current host key before testing or exporting."
+        : "SFTP profile loaded with host-key verification disabled.",
+    );
   }
 
   $("targetRecords").value = String(settings.target_records_per_slice || 5000);
@@ -1313,21 +1401,18 @@ function savedConnectionPayload() {
   };
 }
 
-async function saveConnectionSettings() {
+function saveConnectionSettings() {
   const button = $("saveConnection");
   try {
-    setBusy(button, true, "Saving…");
+    setBusy(button, true, "Remembering…");
     const payload = savedConnectionPayload();
-    await api("/api/settings/stellar-connection", {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    });
+    sessionStorage.setItem(CONNECTION_SESSION_STORAGE_KEY, JSON.stringify(payload));
     state.savedTenantId = payload.tenant_id;
     state.savedTenantName = payload.tenant_name;
     state.savedConnectionExists = true;
     setStatus(
       "savedConnectionStatus",
-      `Saved securely for tenant ${payload.tenant_name}. The credential is encrypted on the exporter server.`,
+      "Remembered for this browser session only. This connection is not stored on the Exporter server and is not shared with other browsers or devices.",
       "success",
     );
   } catch (error) {
@@ -1338,17 +1423,17 @@ async function saveConnectionSettings() {
   }
 }
 
-async function clearSavedConnection() {
+function clearSavedConnection() {
   const button = $("clearSavedConnection");
   try {
     setBusy(button, true, "Clearing…");
-    await api("/api/settings/stellar-connection", {method: "DELETE"});
+    sessionStorage.removeItem(CONNECTION_SESSION_STORAGE_KEY);
     state.savedTenantId = "";
     state.savedTenantName = "";
     state.savedConnectionExists = false;
     setStatus(
       "savedConnectionStatus",
-      "Saved connection removed. Current session values are unchanged.",
+      "Browser-session connection memory cleared. Current form values are unchanged.",
       "success",
     );
   } catch (error) {
@@ -1359,16 +1444,23 @@ async function clearSavedConnection() {
   }
 }
 
-async function loadSavedConnection() {
+function loadSavedConnection() {
   try {
-    const result = await api("/api/settings/stellar-connection");
-    if (!result.saved || !result.connection) {
+    const raw = sessionStorage.getItem(CONNECTION_SESSION_STORAGE_KEY);
+    if (!raw) {
       state.savedConnectionExists = false;
       updateSaveConnectionAvailability();
       return;
     }
 
-    const saved = result.connection;
+    const saved = JSON.parse(raw);
+    if (!saved || typeof saved !== "object" || !saved.host || !saved.token) {
+      sessionStorage.removeItem(CONNECTION_SESSION_STORAGE_KEY);
+      state.savedConnectionExists = false;
+      updateSaveConnectionAvailability();
+      return;
+    }
+
     state.savedConnectionExists = true;
     state.savedTenantId = saved.tenant_id || "";
     state.savedTenantName = saved.tenant_name || "";
@@ -1384,21 +1476,28 @@ async function loadSavedConnection() {
     updateAuthModeUI();
     invalidateTenantSelection(
       state.savedTenantName
-        ? `Saved tenant: ${state.savedTenantName} — test connection to restore`
+        ? `Session tenant: ${state.savedTenantName} — test connection to restore`
         : "Test connection to load tenants",
     );
     setStatus(
       "savedConnectionStatus",
       state.savedTenantName
-        ? `Saved connection loaded. Test connection to restore tenant ${state.savedTenantName}.`
-        : "Saved connection loaded. Test connection to restore its tenant.",
+        ? `Browser-session connection restored. Test connection to restore tenant ${state.savedTenantName}.`
+        : "Browser-session connection restored. Test connection to restore its tenant.",
       "success",
     );
     state.savedConnectionExists = true;
     updateSaveConnectionAvailability();
     updateSummary();
-  } catch (error) {
-    setStatus("savedConnectionStatus", error.message, "error");
+  } catch {
+    sessionStorage.removeItem(CONNECTION_SESSION_STORAGE_KEY);
+    state.savedConnectionExists = false;
+    setStatus(
+      "savedConnectionStatus",
+      "Temporary browser-session connection data was invalid and has been cleared.",
+      "warning",
+    );
+    updateSaveConnectionAvailability();
   }
 }
 
@@ -2025,10 +2124,17 @@ async function runExport() {
     });
 
     if (result.mode === "download") {
-      $("downloadFrame").src = result.download_url;
-      setStatus("runStatus", "Download started. Tracking export progress…");
+      setStatus("runStatus", "Preparing the browser download on the server…");
     }
-    await pollExport(result.status_url);
+    const finalStatus = await pollExport(result.status_url);
+    if (result.mode === "download" && finalStatus.status === "completed") {
+      $("downloadFrame").src = `${result.download_url}?ready=${Date.now()}`;
+      setStatus(
+        "runStatus",
+        `Completed: ${Number(finalStatus.records_exported || 0).toLocaleString()} records · ${humanBytes(finalStatus.bytes_sent)} ready. Download started.`,
+        "success",
+      );
+    }
   } catch (error) {
     setStatus("runStatus", error.message, "error");
   } finally {
@@ -2136,6 +2242,8 @@ function initialize() {
   $("saveConnection").addEventListener("click", saveConnectionSettings);
   $("clearSavedConnection").addEventListener("click", clearSavedConnection);
   $("testDestination").addEventListener("click", () => testRemoteDestination("destinationStatus", "testDestination"));
+  $("getSftpHostKey").addEventListener("click", getSftpHostKey);
+  $("trustSftpHostKey").addEventListener("click", trustSftpHostKey);
   $("testSftpDestination").addEventListener("click", () => testRemoteDestination("sftpDestinationStatus", "testSftpDestination"));
   $("validateQuery").addEventListener("click", validateQuery);
   $("previewQuery").addEventListener("click", previewQuery);
@@ -2189,6 +2297,16 @@ function initialize() {
     renderEffectiveRequest();
   });
   $("sftpAuthMethod").addEventListener("change", updateSftpAuthUI);
+  for (const id of ["sftpHost", "sftpPort"]) {
+    $(id).addEventListener("input", () => clearSftpHostKeyState("SFTP host or port changed. Fetch and trust the host key again."));
+  }
+  $("sftpVerifyHostKey").addEventListener("change", () => {
+    if (!$("sftpVerifyHostKey").checked) {
+      clearSftpHostKeyState("SSH host-key verification is disabled for this destination. This is not recommended.");
+    } else {
+      clearSftpHostKeyState("Fetch and trust the SFTP server host key before testing or exporting.");
+    }
+  });
   const invalidateCredentialTenant = () => {
     state.savedTenantId = "";
     state.savedTenantName = "";
@@ -2199,7 +2317,7 @@ function initialize() {
     if (state.savedConnectionExists) {
       setStatus(
         "savedConnectionStatus",
-        "Current connection values changed. The saved copy is unchanged until you press Save connection again.",
+        "Current connection values changed. Browser-session memory is unchanged until you press Remember this session again.",
         "warning",
       );
     }

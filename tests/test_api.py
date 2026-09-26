@@ -1,6 +1,8 @@
 import json
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import time
 
 from fastapi.testclient import TestClient
 
@@ -40,6 +42,25 @@ async def fake_search(self, index, body):
             "hits": hits[:size],
         },
     }
+
+
+def wait_for_terminal_job(client: TestClient, status_url: str) -> dict:
+    for _ in range(200):
+        response = client.get(status_url)
+        assert response.status_code == 200
+        body = response.json()
+        if body["status"] in {"completed", "failed", "cancelled"}:
+            return body
+        time.sleep(0.01)
+    raise AssertionError("export job did not reach a terminal state")
+
+
+def wait_for_download(client: TestClient, created) -> tuple[dict, object]:
+    body = created.json()
+    status = wait_for_terminal_job(client, body["status_url"])
+    assert status["status"] == "completed", status
+    download = client.get(body["download_url"])
+    return status, download
 
 
 def payload():
@@ -85,16 +106,17 @@ def test_preview_and_json_download(monkeypatch):
     download_url = job.json()["download_url"]
     status_url = job.json()["status_url"]
 
-    download = client.get(download_url)
+    metrics, download = wait_for_download(client, job)
     assert download.status_code == 200
     assert download.headers["content-type"].startswith("application/json")
     assert download.headers["content-disposition"] == 'attachment; filename="alerts.json"'
+    assert int(download.headers["content-length"]) == len(download.content)
+    assert len(download.content) > 0
     rows = download.json()
     assert [row["severity"] for row in rows] == [80, 90]
 
     status = client.get(status_url)
     assert status.status_code == 200
-    metrics = status.json()
     assert metrics["status"] == "completed"
     assert metrics["records_exported"] == 2
     assert metrics["bytes_sent"] > 0
@@ -222,7 +244,7 @@ def test_selected_fields_filter_stellar_source_and_csv_column_order(monkeypatch)
 
     job = client.post("/api/export/jobs", json=request)
     assert job.status_code == 200
-    download = client.get(job.json()["download_url"])
+    _, download = wait_for_download(client, job)
     assert download.status_code == 200
     lines = download.text.strip().splitlines()
     assert lines[0] == "srcip,metadata.user,timestamp"
@@ -271,7 +293,7 @@ def test_selected_fields_json_preserves_nested_shape(monkeypatch):
 
     job = client.post("/api/export/jobs", json=request)
     assert job.status_code == 200
-    download = client.get(job.json()["download_url"])
+    _, download = wait_for_download(client, job)
     assert download.status_code == 200
     assert download.json() == [
         {"metadata": {"geo": {"country": "KR"}}, "srcip": "10.0.0.1"}
@@ -291,15 +313,19 @@ def test_record_limit_stops_download_at_exact_n(monkeypatch):
 
     job = client.post("/api/export/jobs", json=request)
     assert job.status_code == 200
-    download = client.get(job.json()["download_url"])
+    _, download = wait_for_download(client, job)
     assert download.status_code == 200
     rows = download.json()
     assert len(rows) == 1
     assert rows[0]["srcip"] == "10.0.0.1"
 
 
-def test_pending_download_job_can_be_cancelled(monkeypatch):
-    monkeypatch.setattr(StellarClient, "search", fake_search)
+def test_active_download_job_can_be_cancelled(monkeypatch):
+    async def slow_search(self, index, body):
+        await asyncio.sleep(0.2)
+        return await fake_search(self, index, body)
+
+    monkeypatch.setattr(StellarClient, "search", slow_search)
     client = TestClient(app)
     request = {
         **payload(),
@@ -314,7 +340,6 @@ def test_pending_download_job_can_be_cancelled(monkeypatch):
     cancelled = client.post(body["cancel_url"])
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
-    assert cancelled.json()["cancel_requested"] is True
 
     status = client.get(body["status_url"])
     assert status.status_code == 200
@@ -335,7 +360,7 @@ def test_ndjson_and_csv_advanced_options_flow_through_download_api(monkeypatch):
         "filename": "events",
     }
     ndjson_job = client.post("/api/export/jobs", json=ndjson_request)
-    ndjson = client.get(ndjson_job.json()["download_url"])
+    _, ndjson = wait_for_download(client, ndjson_job)
     assert ndjson.status_code == 200
     assert ndjson.headers["content-type"].startswith("application/x-ndjson")
     assert ndjson.headers["content-disposition"] == 'attachment; filename="events.ndjson"'
@@ -353,7 +378,7 @@ def test_ndjson_and_csv_advanced_options_flow_through_download_api(monkeypatch):
         "csv_bom": True,
     }
     csv_job = client.post("/api/export/jobs", json=csv_request)
-    csv_download = client.get(csv_job.json()["download_url"])
+    _, csv_download = wait_for_download(client, csv_job)
     assert csv_download.status_code == 200
     assert csv_download.content.startswith(b"\xef\xbb\xbf")
     first_line = csv_download.content[3:].decode("utf-8").splitlines()[0]
@@ -378,7 +403,7 @@ def test_persistent_export_history_survives_memory_reset_without_secrets(monkeyp
     created = client.post("/api/export/jobs", json=request)
     assert created.status_code == 200
     body = created.json()
-    downloaded = client.get(body["download_url"])
+    status, downloaded = wait_for_download(client, created)
     assert downloaded.status_code == 200
 
     history = client.get("/api/export/history?limit=10")
@@ -516,3 +541,30 @@ def test_web_basic_auth_protects_ui_and_api_but_not_health(monkeypatch):
 
     allowed_api = client.get("/api/data-sources", auth=("test-ui-user", "test-ui-password"))
     assert allowed_api.status_code == 200
+
+
+def test_sftp_host_key_lookup_endpoint(monkeypatch):
+    async def fake_host_key(host, port):
+        assert host == "sftp.example.test"
+        assert port == 2222
+        return {
+            "algorithm": "ssh-ed25519",
+            "fingerprint": "SHA256:test-fingerprint",
+            "public_key": "ssh-ed25519 AAAATEST",
+        }
+
+    monkeypatch.setattr(main_app, "get_sftp_host_key", fake_host_key)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/destination/sftp-host-key",
+        json={"host": "sftp.example.test", "port": 2222},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "algorithm": "ssh-ed25519",
+        "fingerprint": "SHA256:test-fingerprint",
+        "public_key": "ssh-ed25519 AAAATEST",
+    }

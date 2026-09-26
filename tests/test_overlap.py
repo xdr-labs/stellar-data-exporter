@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 import app.main as main_app
@@ -27,8 +29,12 @@ def export_request(start, end, *, policy="allow", query=None):
 
 
 def test_reject_overlap_blocks_matching_pipeline_but_allows_adjacent_and_different_query(monkeypatch, tmp_path):
+    async def hold_download(job_id):
+        await asyncio.sleep(60)
+
     store = JobStore(tmp_path / "overlap.sqlite3")
     monkeypatch.setattr(main_app, "JOB_STORE", store)
+    monkeypatch.setattr(main_app, "run_download_job", hold_download)
     main_app.EXPORT_JOBS.clear()
     client = TestClient(app)
 

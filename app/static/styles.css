@@ -164,3 +164,10 @@ details{border-top:1px solid #e5e1e2;padding-top:13px}summary{cursor:pointer;fon
 .confirm-count{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:16px 0;padding:14px 16px;border-radius:10px;background:#fff0f2;border:1px solid #efb8be}.confirm-count span{font-size:12px;font-weight:800;color:#7f1723}.confirm-count strong{font-size:26px;color:#a51f2d}
 .confirm-guidance{font-size:12px;color:#5e5155}.confirm-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}.button.danger{background:#b32638;color:#fff;border:1px solid #982131}.button.danger:hover{background:#971d2c}
 @media(max-width:650px){.confirm-dialog{grid-template-columns:1fr;padding:20px}.confirm-icon{width:46px;height:46px;font-size:24px}.confirm-actions{flex-direction:column-reverse}.confirm-actions .button{width:100%}}
+
+.sftp-host-key{margin-top:14px;padding:12px;border:1px solid #e4dfe1;border-radius:9px;background:#faf9f9}
+.host-key-panel{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-top:10px}
+.host-key-panel>div{min-width:0;border:1px solid #e7e2e4;border-radius:7px;background:#fff;padding:8px 9px}
+.host-key-panel span{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:3px}
+.host-key-panel code{display:block;font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:auto;white-space:nowrap}
+@media(max-width:760px){.host-key-panel{grid-template-columns:1fr}.host-key-panel .button{width:100%}}

@@ -76,12 +76,12 @@
         </div>
         <div class="saved-connection-actions">
           <div>
-            <strong>Saved Stellar Cyber connection</strong>
-            <p class="hint">Host, credential, TLS setting and selected tenant are encrypted on the exporter server. Use Clear saved to remove them.</p>
+            <strong>Temporary connection memory</strong>
+            <p class="hint">Remember this connection only in the current browser session. It is never stored as a shared connection on the Exporter server and is not available to other browsers or devices.</p>
           </div>
           <div class="row">
-            <button id="clearSavedConnection" class="button secondary" type="button" disabled>Clear saved</button>
-            <button id="saveConnection" class="button primary" type="button" disabled>Save connection</button>
+            <button id="clearSavedConnection" class="button secondary" type="button" disabled>Clear session</button>
+            <button id="saveConnection" class="button primary" type="button" disabled>Remember this session</button>
           </div>
         </div>
         <div id="savedConnectionStatus" class="status hidden"></div>
@@ -423,8 +423,21 @@
           <label id="sftpKeyLabel">Private key
             <textarea id="sftpPrivateKey" class="secret-area" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
           </label>
-          <div class="row between">
-            <label class="check advanced-only"><input id="sftpVerifyHostKey" type="checkbox" checked /> Verify SSH host key</label>
+          <div class="sftp-host-key">
+            <div class="row between wrap">
+              <label class="check"><input id="sftpVerifyHostKey" type="checkbox" checked /> Verify SSH host key <span class="managed-badge">Recommended</span></label>
+              <button id="getSftpHostKey" class="button secondary small" type="button">Get host key</button>
+            </div>
+            <p class="hint">For a new SFTP server, fetch its SSH host key, compare the SHA256 fingerprint with the server administrator, then trust that key before testing the destination.</p>
+            <div id="sftpHostKeyPanel" class="host-key-panel hidden">
+              <div><span>Algorithm</span><code id="sftpHostKeyAlgorithm">—</code></div>
+              <div><span>SHA256 fingerprint</span><code id="sftpHostKeyFingerprint">—</code></div>
+              <button id="trustSftpHostKey" class="button secondary small" type="button">Trust this host key</button>
+            </div>
+            <div id="sftpHostKeyStatus" class="status hidden"></div>
+          </div>
+          <div class="row between wrap">
+            <span class="hint">Host-key verification is separate from password/private-key authentication.</span>
             <button id="testSftpDestination" class="button secondary">Test destination</button>
           </div>
           <div id="sftpDestinationStatus" class="status hidden"></div>

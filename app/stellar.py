@@ -12,6 +12,9 @@ import httpx
 
 
 JWT_REFRESH_AGE_SECONDS = 8 * 60
+QUERY_RETRY_ATTEMPTS = 4
+QUERY_RETRY_BASE_DELAY_SECONDS = 0.5
+TRANSIENT_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 
 
 class StellarAPIError(RuntimeError):
@@ -199,14 +202,22 @@ class StellarClient:
     async def list_tenants(self) -> list[dict[str, str]]:
         url = f"{self.host}/connect/api/v1/tenants"
         timeout = httpx.Timeout(30.0, connect=15.0)
-        try:
-            async with httpx.AsyncClient(
-                verify=self.verify_tls,
-                timeout=timeout,
-                transport=self.transport,
-            ) as client:
-                for attempt in range(2):
-                    jwt = await self._get_access_token(client, force_refresh=attempt == 1)
+        response: httpx.Response | None = None
+        force_refresh = False
+        last_connection_error: Exception | None = None
+
+        async with httpx.AsyncClient(
+            verify=self.verify_tls,
+            timeout=timeout,
+            transport=self.transport,
+        ) as client:
+            for attempt in range(QUERY_RETRY_ATTEMPTS):
+                try:
+                    jwt = await self._get_access_token(
+                        client,
+                        force_refresh=force_refresh,
+                    )
+                    force_refresh = False
                     response = await client.get(
                         url,
                         headers={
@@ -215,13 +226,41 @@ class StellarClient:
                             "Content-Type": "application/json",
                         },
                     )
-                    if response.status_code != 401 or attempt == 1:
-                        break
-        except httpx.RequestError as exc:
-            raise StellarConnectionError(
-                "Cannot reach the Stellar Cyber tenant API. Check the host, network path, and TLS settings."
-            ) from exc
+                except (httpx.RequestError, StellarConnectionError) as exc:
+                    last_connection_error = exc
+                    if attempt + 1 >= QUERY_RETRY_ATTEMPTS:
+                        raise StellarConnectionError(
+                            "Cannot reach the Stellar Cyber tenant API after automatic retries. "
+                            "Check the host, network path, and TLS settings."
+                        ) from exc
+                    if self.on_retry:
+                        self.on_retry(1)
+                    await asyncio.sleep(
+                        QUERY_RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                    )
+                    continue
 
+                if response.status_code == 401 and attempt + 1 < QUERY_RETRY_ATTEMPTS:
+                    force_refresh = True
+                    if self.on_retry:
+                        self.on_retry(1)
+                    continue
+                if (
+                    response.status_code in TRANSIENT_HTTP_STATUSES
+                    and attempt + 1 < QUERY_RETRY_ATTEMPTS
+                ):
+                    if self.on_retry:
+                        self.on_retry(1)
+                    await asyncio.sleep(
+                        QUERY_RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                    )
+                    continue
+                break
+
+        if response is None:
+            raise StellarConnectionError(
+                "Cannot reach the Stellar Cyber tenant API."
+            ) from last_connection_error
         if response.status_code == 401:
             raise StellarAuthError("Stellar Cyber rejected the session token while loading tenants.")
         if response.status_code == 403:
@@ -251,18 +290,22 @@ class StellarClient:
         encoded_index = quote(index, safe="*,-._")
         url = f"{self.host}/connect/api/data/{encoded_index}/_search"
         timeout = httpx.Timeout(60.0, connect=15.0)
+        response: httpx.Response | None = None
+        force_refresh = False
+        last_connection_error: Exception | None = None
 
-        try:
-            async with httpx.AsyncClient(
-                verify=self.verify_tls,
-                timeout=timeout,
-                transport=self.transport,
-            ) as client:
-                for attempt in range(2):
+        async with httpx.AsyncClient(
+            verify=self.verify_tls,
+            timeout=timeout,
+            transport=self.transport,
+        ) as client:
+            for attempt in range(QUERY_RETRY_ATTEMPTS):
+                try:
                     jwt = await self._get_access_token(
                         client,
-                        force_refresh=attempt == 1,
+                        force_refresh=force_refresh,
                     )
+                    force_refresh = False
                     headers = {
                         "Authorization": f"Bearer {jwt}",
                         "Accept": "application/json",
@@ -279,18 +322,45 @@ class StellarClient:
                         response = await client.request(
                             "GET",
                             url,
-                            headers={**headers, "Content-Type": "application/json"},
+                            headers=headers,
                             json=self._tenant_scoped_body(body),
                         )
-                    if response.status_code != 401 or attempt == 1:
-                        break
+                except (httpx.RequestError, StellarConnectionError) as exc:
+                    last_connection_error = exc
+                    if attempt + 1 >= QUERY_RETRY_ATTEMPTS:
+                        raise StellarConnectionError(
+                            "Connection to Stellar Cyber remained unavailable after automatic retries. "
+                            "Check the host, network path, and TLS settings."
+                        ) from exc
                     if self.on_retry:
                         self.on_retry(1)
-        except httpx.RequestError as exc:
-            raise StellarConnectionError(
-                "Connection to Stellar Cyber failed while querying data. Check the host, network path, and TLS settings."
-            ) from exc
+                    await asyncio.sleep(
+                        QUERY_RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                    )
+                    continue
 
+                if response.status_code == 401 and attempt + 1 < QUERY_RETRY_ATTEMPTS:
+                    force_refresh = True
+                    if self.on_retry:
+                        self.on_retry(1)
+                    continue
+
+                if (
+                    response.status_code in TRANSIENT_HTTP_STATUSES
+                    and attempt + 1 < QUERY_RETRY_ATTEMPTS
+                ):
+                    if self.on_retry:
+                        self.on_retry(1)
+                    await asyncio.sleep(
+                        QUERY_RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                    )
+                    continue
+                break
+
+        if response is None:
+            raise StellarConnectionError(
+                "Connection to Stellar Cyber failed while querying data."
+            ) from last_connection_error
         if response.status_code == 401:
             raise StellarAuthError(
                 "Stellar Cyber rejected the session token. Recheck the selected credential type and credential."
