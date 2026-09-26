@@ -14,6 +14,7 @@ def export_request(start, end, *, policy="allow", query=None):
         "token": "x",
         "verify_tls": True,
         "sources": ["alerts"],
+        "tenant_id": "tenant-1",
         "time_field": "timestamp",
         "start": start.isoformat(),
         "end": end.isoformat(),

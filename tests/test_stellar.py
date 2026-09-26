@@ -1,4 +1,5 @@
 import base64
+import json
 
 import httpx
 import pytest
@@ -22,6 +23,9 @@ async def test_stellar_client_exchanges_all_access_token_and_reuses_jwt():
         if request.url.path.endswith("/_search"):
             calls["search"] += 1
             assert request.headers["Authorization"] == "Bearer jwt-1"
+            body = json.loads(request.content)
+            assert body["query"]["bool"]["filter"] == [{"term": {"tenantid": "tenant-1"}}]
+            assert body["query"]["bool"]["must"] == [{"match_all": {}}]
             return httpx.Response(
                 200,
                 json={"hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}},
@@ -34,6 +38,7 @@ async def test_stellar_client_exchanges_all_access_token_and_reuses_jwt():
         "admin@example.test",
         "refresh-token",
         transport=httpx.MockTransport(handler),
+        tenant_id="tenant-1",
     )
 
     await client.search("aella-ser-*", {"query": {"match_all": {}}})
@@ -70,6 +75,7 @@ async def test_stellar_client_refreshes_jwt_after_401():
         "admin@example.test",
         "refresh-token",
         transport=httpx.MockTransport(handler),
+        tenant_id="tenant-1",
     )
 
     response = await client.search("aella-ser-*", {"query": {"match_all": {}}})
@@ -95,7 +101,7 @@ async def test_user_scope_api_key_uses_bearer_exchange_and_lucene_search_params(
             assert request.url.params["size"] == "25"
             assert request.url.params["track_total_hits"] == "true"
             assert request.url.params["q"] == (
-                "(event_status:New) AND "
+                '((event_status:New) AND tenantid:"tenant-1") AND '
                 "timestamp:[1790294400000 TO 1790298000000}"
             )
             return httpx.Response(
@@ -113,6 +119,7 @@ async def test_user_scope_api_key_uses_bearer_exchange_and_lucene_search_params(
         auth_mode="user_scope",
         query_mode="stellar_lucene",
         stellar_query="event_status:New",
+        tenant_id="tenant-1",
     )
     response = await client.search(
         "aella-ser-*",
@@ -136,3 +143,73 @@ async def test_user_scope_api_key_uses_bearer_exchange_and_lucene_search_params(
 
     assert response["hits"]["total"]["value"] == 2
     assert calls == {"token": 1, "search": 1}
+
+
+@pytest.mark.asyncio
+async def test_list_tenants_maps_and_sorts_accessible_tenants():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/api/v1/access_token":
+            return httpx.Response(200, json={"access_token": "jwt-1"})
+        if request.url.path == "/connect/api/v1/tenants":
+            assert request.headers["Authorization"] == "Bearer jwt-1"
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"cust_id": "b", "cust_name": "Zulu"},
+                        {"cust_id": "a", "cust_name": "Alpha"},
+                        {"cust_name": "Missing ID"},
+                    ]
+                },
+            )
+        raise AssertionError(f"Unexpected URL: {request.url}")
+
+    client = StellarClient(
+        "https://stellar.example.test",
+        "admin@example.test",
+        "refresh-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    tenants = await client.list_tenants()
+
+    assert tenants == [
+        {"id": "a", "name": "Alpha"},
+        {"id": "b", "name": "Zulu"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_root_scope_search_injects_server_side_tenant_filter():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/api/v1/access_token":
+            return httpx.Response(200, json={"access_token": "jwt-1"})
+        if request.url.path.endswith("/_search"):
+            captured["body"] = __import__("json").loads(request.content)
+            return httpx.Response(
+                200,
+                json={"hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}},
+            )
+        raise AssertionError(f"Unexpected URL: {request.url}")
+
+    client = StellarClient(
+        "https://stellar.example.test",
+        "admin@example.test",
+        "refresh-token",
+        transport=httpx.MockTransport(handler),
+        tenant_id="tenant-42",
+    )
+
+    await client.search(
+        "aella-ser-*",
+        {
+            "size": 0,
+            "query": {"term": {"severity": 80}},
+        },
+    )
+
+    scoped = captured["body"]["query"]["bool"]
+    assert scoped["must"] == [{"term": {"severity": 80}}]
+    assert scoped["filter"] == [{"term": {"tenantid": "tenant-42"}}]

@@ -15,6 +15,7 @@ const state = {
   relativeMinutes: 1440,
   pendingProfileSources: null,
   pendingSelectedFields: null,
+  tenants: [],
 };
 
 const PROFILE_STORAGE_KEY = "stellarDataExporter.profiles.v1";
@@ -64,6 +65,7 @@ function updateRelativePresetUI() {
 }
 
 function applyRelativeMinutes(minutes) {
+  clearQueryResultState();
   const value = Math.max(1, Number(minutes) || 1);
   const end = new Date();
   const start = new Date(end.getTime() - value * 60 * 1000);
@@ -76,6 +78,7 @@ function applyRelativeMinutes(minutes) {
 }
 
 function markAbsoluteTime() {
+  clearQueryResultState();
   state.relativeMinutes = null;
   updateRelativePresetUI();
 }
@@ -119,6 +122,66 @@ function isAdvancedMode() {
 
 function selectedAuthMode() {
   return document.querySelector('input[name="authMode"]:checked')?.value || "root_scope";
+}
+
+function selectedTenantId() {
+  return $("tenantSelect")?.value?.trim() || "";
+}
+
+function selectedTenantName() {
+  const tenantId = selectedTenantId();
+  return state.tenants.find((tenant) => tenant.id === tenantId)?.name || "";
+}
+
+function clearQueryResultState() {
+  state.previewTotal = null;
+  state.previewLatencyMs = null;
+  state.previewBytes = null;
+  state.estimatedBytes = null;
+  updateDiscoveredFields([]);
+  const preflight = $("exportPreflight");
+  if (preflight) {
+    preflight.className = "export-preflight hidden";
+    preflight.textContent = "";
+  }
+}
+
+function invalidateTenantSelection(message = "Test connection to load tenants") {
+  state.tenants = [];
+  clearQueryResultState();
+  const select = $("tenantSelect");
+  if (select) {
+    select.disabled = true;
+    select.innerHTML = '<option value="">' + escapeHtml(message) + '</option>';
+  }
+  $("tenantStatus")?.classList.add("hidden");
+  updateSummary();
+}
+
+function renderTenants(tenants) {
+  state.tenants = Array.isArray(tenants) ? tenants : [];
+  const select = $("tenantSelect");
+  if (!select) return;
+  if (!state.tenants.length) {
+    invalidateTenantSelection("No accessible tenants returned");
+    setStatus("tenantStatus", "No accessible tenants were returned for this credential.", "error");
+    return;
+  }
+  const autoSelect = state.tenants.length === 1;
+  const options = state.tenants.map((tenant) =>
+    '<option value="' + escapeHtml(tenant.id) + '">' + escapeHtml(tenant.name) + '</option>'
+  ).join("");
+  select.innerHTML = autoSelect ? options : '<option value="">Select one tenant…</option>' + options;
+  select.disabled = false;
+  if (autoSelect) select.value = state.tenants[0].id;
+  setStatus(
+    "tenantStatus",
+    autoSelect
+      ? "1 tenant found and selected: " + state.tenants[0].name + "."
+      : state.tenants.length.toLocaleString() + " tenants available. Select exactly one tenant before querying or exporting.",
+    autoSelect ? "success" : "warning",
+  );
+  updateSummary();
 }
 
 function selectedQueryMode() {
@@ -294,19 +357,21 @@ function buildEffectiveQuery() {
   delete body.search_after;
 
   const originalQuery = body.query || {match_all: {}};
+  const managedFilters = [];
+  const tenantId = selectedTenantId();
+  if (tenantId) managedFilters.push({term: {tenantid: tenantId}});
+  managedFilters.push({
+    range: {
+      [timeField]: {
+        gte: start,
+        lt: end,
+      },
+    },
+  });
   body.query = {
     bool: {
       must: [originalQuery],
-      filter: [
-        {
-          range: {
-            [timeField]: {
-              gte: start,
-              lt: end,
-            },
-          },
-        },
-      ],
+      filter: managedFilters,
     },
   };
   return body;
@@ -539,6 +604,8 @@ function basePayload() {
   if (!$("token").value.trim()) {
     throw new Error(authMode === "user_scope" ? "User API Key is required." : "All-Access Token is required.");
   }
+  const tenantId = selectedTenantId();
+  if (!tenantId) throw new Error("Select one tenant before querying or exporting.");
   const sources = selectedSources();
   if (!sources.length) throw new Error("Select at least one data source.");
 
@@ -549,6 +616,7 @@ function basePayload() {
     token: $("token").value.trim(),
     verify_tls: $("verifyTls").checked,
     sources,
+    tenant_id: tenantId,
     time_field: $("timeField").value.trim() || "timestamp",
     start,
     end,
@@ -735,6 +803,7 @@ function saveProfile() {
 
 function applyProfileSettings(settings) {
   if (!settings) return;
+  invalidateTenantSelection("Profile loaded — test connection to load tenants");
   $("host").value = settings.host || "";
   setRadioValue("authMode", settings.auth_mode || "root_scope");
   $("verifyTls").checked = settings.verify_tls !== false;
@@ -883,6 +952,7 @@ function rememberCurrentQuery() {
 }
 
 function loadSelectedQueryHistory() {
+  clearQueryResultState();
   const id = $("queryHistorySelect").value;
   const item = readLocalJson(QUERY_HISTORY_STORAGE_KEY, []).find((entry) => entry.id === id);
   if (!item) return;
@@ -1112,6 +1182,7 @@ function updateSftpAuthUI() {
 function updateSummary() {
   const host = $("host").value.trim();
   $("summaryHost").textContent = host ? host.replace(/^https?:\/\//, "") : "Not set";
+  $("summaryTenant").textContent = selectedTenantName() || "Not selected";
   const labels = selectedSourceLabels();
   $("summarySources").textContent = labels.length ? labels.join(", ") : "None";
   $("selectedSourceCount").textContent = `${labels.length} source${labels.length === 1 ? "" : "s"}`;
@@ -1150,7 +1221,7 @@ async function testConnection() {
       throw new Error("Account email is required for Root Scope.");
     }
     const sources = selectedSources();
-    if (!sources.length) throw new Error("Select at least one data source.");
+    const connectionSources = sources.length ? sources : ["alerts"];
     setBusy(button, true, "Testing…");
     setStatus("connectionStatus", "Testing connection…");
     const result = await api("/api/connection/test", {
@@ -1161,12 +1232,18 @@ async function testConnection() {
         email: authMode === "root_scope" ? $("email").value.trim() : null,
         token: $("token").value.trim(),
         verify_tls: $("verifyTls").checked,
-        sources,
+        sources: connectionSources,
       }),
     });
-    const names = result.sources?.join(", ") || `${sources.length} selected source(s)`;
-    setStatus("connectionStatus", `Connected. Access confirmed for: ${names}${result.took_ms != null ? ` (${result.took_ms} ms)` : ""}.`, "success");
+    const names = result.sources?.join(", ") || `${connectionSources.length} selected source(s)`;
+    renderTenants(result.tenants || []);
+    setStatus(
+      "connectionStatus",
+      `Connected. ${Number(result.tenant_count || 0).toLocaleString()} tenant(s) loaded. Data sources ready: ${names}.`,
+      "success",
+    );
   } catch (error) {
+    invalidateTenantSelection("Connection required to load tenants");
     setStatus("connectionStatus", error.message, "error");
   } finally {
     setBusy(button, false);
@@ -1620,13 +1697,91 @@ async function resumeExport(jobId, button) {
   }
 }
 
+function renderExportPreflight(result, exportConfig = null) {
+  const box = $("exportPreflight");
+  const total = Number(result.total || 0);
+  const level = result.warning_level || "normal";
+  const recordLimit = exportConfig?.record_limit;
+  const limitNote = recordLimit != null
+    ? ` Export output is limited to ${Number(recordLimit).toLocaleString()} records, but the source query still matched ${total.toLocaleString()} records.`
+    : "";
+  box.className = "export-preflight" + (level === "normal" ? "" : " " + level);
+  box.textContent = level === "normal"
+    ? `Count check complete: ${total.toLocaleString()} records matched the selected tenant, data sources, time range and query.${limitNote}`
+    : `⚠ ${total.toLocaleString()} records matched. ${result.warning || "This large export may degrade system performance."}${limitNote}`;
+}
+
+function confirmLargeExport(result) {
+  return new Promise((resolve) => {
+    const modal = $("largeExportConfirm");
+    const cancel = $("cancelLargeExport");
+    const confirm = $("confirmLargeExport");
+    $("largeExportCount").textContent = Number(result.total || 0).toLocaleString();
+    $("largeExportMessage").textContent = result.warning || "This large export may degrade system performance.";
+    modal.classList.remove("hidden");
+
+    const finish = (value) => {
+      modal.classList.add("hidden");
+      cancel.onclick = null;
+      confirm.onclick = null;
+      modal.onclick = null;
+      document.removeEventListener("keydown", onKey);
+      resolve(value);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") finish(false);
+    };
+    cancel.onclick = () => finish(false);
+    confirm.onclick = () => finish(true);
+    modal.onclick = (event) => {
+      if (event.target === modal) finish(false);
+    };
+    document.addEventListener("keydown", onKey);
+    cancel.focus();
+  });
+}
+
 async function runExport() {
   const button = $("runExport");
   try {
     if (state.activeExport) throw new Error("Another export is already active.");
-    setBusy(button, true, "Running export…");
-    setStatus("runStatus", "Creating export job…");
+    setBusy(button, true, "Checking count…");
     const payload = exportPayload();
+    setStatus("runStatus", "Checking matched record count for the selected tenant before export…");
+    const countResult = await api("/api/query/count", {
+      method: "POST",
+      body: JSON.stringify(basePayload()),
+    });
+    state.previewTotal = Number(countResult.total || 0);
+    state.previewLatencyMs = countResult.took_ms;
+    $("recordCount").textContent = state.previewTotal.toLocaleString();
+    renderExportPreflight(countResult, payload);
+    updateSummary();
+
+    if (state.previewTotal === 0) {
+      setStatus(
+        "runStatus",
+        "No records match the selected tenant, data sources, time range and query. Export was not started.",
+        "warning",
+      );
+      return;
+    }
+
+    if (countResult.warning_level && countResult.warning_level !== "normal") {
+      button.textContent = "Awaiting confirmation…";
+      const proceed = await confirmLargeExport(countResult);
+      if (!proceed) {
+        setStatus(
+          "runStatus",
+          `Export not started. ${state.previewTotal.toLocaleString()} records matched. Refine the tenant, time range, query or data sources and try again.`,
+          "warning",
+        );
+        return;
+      }
+    }
+
+    button.textContent = "Running export…";
+    setStatus("runStatus", `Count check complete: ${state.previewTotal.toLocaleString()} records. Creating export job…`);
     const result = await api("/api/export/jobs", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -1680,6 +1835,7 @@ function renderSources(items) {
 
   grid.querySelectorAll('input[name="source"]').forEach((input) => {
     input.addEventListener("change", () => {
+      clearQueryResultState();
       input.closest(".source-option")?.classList.toggle("selected", input.checked);
       updateSummary();
       refreshIndexPlan();
@@ -1701,6 +1857,7 @@ async function loadDataSources() {
 }
 
 function setAllSources(checked) {
+  clearQueryResultState();
   document.querySelectorAll('input[name="source"]').forEach((input) => {
     input.checked = checked;
     input.closest(".source-option")?.classList.toggle("selected", checked);
@@ -1774,12 +1931,45 @@ function initialize() {
     renderEffectiveRequest();
   });
   $("sftpAuthMethod").addEventListener("change", updateSftpAuthUI);
+  const invalidateCredentialTenant = () => {
+    if (state.tenants.length || !$("tenantSelect").disabled) {
+      invalidateTenantSelection("Credentials changed — test connection again");
+      setStatus("tenantStatus", "Connection settings changed. Test connection again to reload accessible tenants.", "warning");
+    }
+  };
+  for (const id of ["host", "email", "token"]) {
+    $(id).addEventListener("input", invalidateCredentialTenant);
+  }
+  $("verifyTls").addEventListener("change", invalidateCredentialTenant);
   document.querySelectorAll('input[name="authMode"]').forEach((radio) => {
-    radio.addEventListener("change", updateAuthModeUI);
+    radio.addEventListener("change", () => {
+      invalidateCredentialTenant();
+      updateAuthModeUI();
+    });
+  });
+  $("tenantSelect").addEventListener("change", () => {
+    clearQueryResultState();
+    const name = selectedTenantName();
+    setStatus(
+      "tenantStatus",
+      name
+        ? `Selected tenant: ${name}. Preview, count, export and schedules are restricted to this tenant.`
+        : "Select exactly one tenant before querying or exporting.",
+      name ? "success" : "warning",
+    );
+    updateSummary();
+    renderEffectiveRequest();
   });
   document.querySelectorAll('input[name="queryMode"]').forEach((radio) => {
-    radio.addEventListener("change", updateQueryModeUI);
+    radio.addEventListener("change", () => {
+      clearQueryResultState();
+      updateQueryModeUI();
+    });
   });
+  for (const id of ["queryDsl", "stellarQuery", "timeField"]) {
+    $(id).addEventListener("input", clearQueryResultState);
+    $(id).addEventListener("change", clearQueryResultState);
+  }
   $("toggleActualIndices").addEventListener("click", () => {
     const target = $("resolvedIndices");
     const showing = !target.classList.contains("hidden");

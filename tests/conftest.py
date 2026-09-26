@@ -17,3 +17,4 @@ os.environ.setdefault(
     str(_TEST_STATE_DIR / "schedule.key"),
 )
 os.environ.setdefault("STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS", "3600")
+os.environ.setdefault("STELLAR_EXPORTER_UI_AUTH_DISABLED", "1")

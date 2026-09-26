@@ -62,6 +62,18 @@
           <button id="testConnection" class="button secondary">Test connection</button>
         </div>
         <div id="connectionStatus" class="status hidden"></div>
+        <div class="tenant-picker">
+          <div class="source-header">
+            <div>
+              <label for="tenantSelect">Tenant <span class="required-badge">Required</span></label>
+              <p class="hint">Connect first, then choose exactly one tenant. Preview, count, export, resume and schedules are server-side restricted to this tenant.</p>
+            </div>
+          </div>
+          <select id="tenantSelect" disabled>
+            <option value="">Test connection to load tenants</option>
+          </select>
+          <div id="tenantStatus" class="status hidden"></div>
+        </div>
       </section>
 
       <section class="card">
@@ -469,6 +481,7 @@
             <span>Destination</span>
           </div>
           <p class="summary-note final-note">Credentials stay in memory only; remote-job credentials are discarded after completion.</p>
+          <div id="exportPreflight" class="export-preflight hidden" role="status" aria-live="polite"></div>
           <div id="runStatus" class="status hidden"></div>
           <div id="exportProgress" class="export-progress hidden">
             <div class="export-progress-head">
@@ -528,6 +541,7 @@
     <aside class="summary-card">
       <p class="eyebrow">EXPORT SUMMARY</p>
       <div class="summary-row"><span>Source</span><strong id="summaryHost">Not set</strong></div>
+      <div class="summary-row"><span>Tenant</span><strong id="summaryTenant">Not selected</strong></div>
       <div class="summary-row"><span>Data sources</span><strong id="summarySources">Alerts</strong></div>
       <div class="summary-row"><span>Range</span><strong id="summaryRange">—</strong></div>
       <div class="summary-row"><span>Matched</span><strong id="summaryRecords">Preview required</strong></div>
@@ -537,6 +551,23 @@
       <p class="summary-note">Review only · Run export is available after Destination settings.</p>
     </aside>
   </main>
+
+  <div id="largeExportConfirm" class="confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="largeExportTitle">
+    <div class="confirm-dialog">
+      <div class="confirm-icon">!</div>
+      <div>
+        <p class="eyebrow">LARGE EXPORT WARNING</p>
+        <h2 id="largeExportTitle">This export may degrade system performance</h2>
+        <p id="largeExportMessage">A large number of records matched this query.</p>
+        <div class="confirm-count"><span>Matched records</span><strong id="largeExportCount">0</strong></div>
+        <p class="confirm-guidance">Large queries can increase load on Stellar Cyber and the Exporter. Reduce the time range, query, or selected data sources when possible.</p>
+        <div class="confirm-actions">
+          <button id="cancelLargeExport" class="button secondary" type="button">Go back and refine</button>
+          <button id="confirmLargeExport" class="button danger" type="button">Export anyway</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <iframe id="downloadFrame" class="download-frame" title="download"></iframe>
   <script src="/app.js"></script>

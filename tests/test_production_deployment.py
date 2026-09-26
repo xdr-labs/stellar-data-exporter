@@ -34,7 +34,7 @@ def test_systemd_service_is_loopback_only_and_hardened():
     assert "AmbientCapabilities=\n" in unit
 
 
-def test_nginx_enforces_tls_auth_rate_limit_and_loopback_proxy():
+def test_nginx_enforces_tls_rate_limit_headers_and_loopback_proxy():
     rate = read("deploy/nginx/00-stellar-data-exporter-rate-limit.conf")
     site = read("deploy/nginx/stellar-data-exporter.conf")
 
@@ -43,8 +43,8 @@ def test_nginx_enforces_tls_auth_rate_limit_and_loopback_proxy():
 
     assert "listen 443 ssl http2;" in site
     assert "ssl_protocols TLSv1.2 TLSv1.3;" in site
-    assert 'auth_basic "Stellar Data Exporter";' in site
-    assert "auth_basic_user_file /etc/stellar-data-exporter/htpasswd;" in site
+    assert "auth_basic " not in site
+    assert "auth_basic_user_file" not in site
     assert "limit_req zone=stellar_exporter_api burst=30 nodelay;" in site
     assert "limit_req_status 429;" in site
     assert site.count("proxy_pass http://127.0.0.1:8787;") == 2
@@ -114,8 +114,14 @@ def test_state_backup_and_restore_test_scripts(tmp_path):
 
 def test_production_runbook_preserves_encryption_key_and_private_backend():
     runbook = read("docs/PRODUCTION.md")
+    env_example = read("deploy/systemd/exporter.env.example")
 
     assert "TCP 8787 must remain loopback-only" in runbook
+    assert "application HTTP Basic authentication" in runbook
+    assert "STELLAR_EXPORTER_UI_USERNAME" in runbook
+    assert "STELLAR_EXPORTER_UI_PASSWORD" in runbook
+    assert "STELLAR_EXPORTER_UI_USERNAME" in env_example
+    assert "STELLAR_EXPORTER_UI_PASSWORD" in env_example
     assert "schedule.key" in runbook
     assert "Losing this key" in runbook
     assert "same `schedule.key`" in runbook

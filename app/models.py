@@ -45,6 +45,7 @@ class QueryInput(BaseModel):
     token: str = Field(min_length=1)
     verify_tls: bool = True
     sources: list[DataSourceId] = Field(min_length=1)
+    tenant_id: str = Field(min_length=1)
     time_field: str = Field(default="timestamp", min_length=1)
     start: datetime
     end: datetime

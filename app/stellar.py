@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from copy import deepcopy
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -41,6 +42,7 @@ class StellarClient:
         auth_mode: str = "root_scope",
         query_mode: str = "elasticsearch_dsl",
         stellar_query: str | None = None,
+        tenant_id: str | None = None,
     ):
         self.host = host.rstrip("/")
         self.email = email
@@ -51,6 +53,7 @@ class StellarClient:
         self.auth_mode = auth_mode
         self.query_mode = query_mode
         self.stellar_query = (stellar_query or "").strip() or None
+        self.tenant_id = (tenant_id or "").strip() or None
         self._jwt: str | None = None
         self._jwt_obtained_at = 0.0
         self._jwt_lock = asyncio.Lock()
@@ -145,6 +148,9 @@ class StellarClient:
             ),
         }
         expression = self.stellar_query or "*:*"
+        if not self.tenant_id:
+            raise StellarAPIError("Tenant selection is required before querying data.")
+        expression = f'({expression}) AND tenantid:"{self.tenant_id}"'
 
         query = body.get("query")
         if isinstance(query, dict):
@@ -176,6 +182,70 @@ class StellarClient:
 
         params["q"] = expression
         return params
+
+    def _tenant_scoped_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        if not self.tenant_id:
+            raise StellarAPIError("Tenant selection is required before querying data.")
+        scoped = deepcopy(body)
+        existing_query = scoped.get("query") or {"match_all": {}}
+        scoped["query"] = {
+            "bool": {
+                "must": [existing_query],
+                "filter": [{"term": {"tenantid": self.tenant_id}}],
+            }
+        }
+        return scoped
+
+    async def list_tenants(self) -> list[dict[str, str]]:
+        url = f"{self.host}/connect/api/v1/tenants"
+        timeout = httpx.Timeout(30.0, connect=15.0)
+        try:
+            async with httpx.AsyncClient(
+                verify=self.verify_tls,
+                timeout=timeout,
+                transport=self.transport,
+            ) as client:
+                for attempt in range(2):
+                    jwt = await self._get_access_token(client, force_refresh=attempt == 1)
+                    response = await client.get(
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {jwt}",
+                            "Accept": "application/json",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    if response.status_code != 401 or attempt == 1:
+                        break
+        except httpx.RequestError as exc:
+            raise StellarConnectionError(
+                "Cannot reach the Stellar Cyber tenant API. Check the host, network path, and TLS settings."
+            ) from exc
+
+        if response.status_code == 401:
+            raise StellarAuthError("Stellar Cyber rejected the session token while loading tenants.")
+        if response.status_code == 403:
+            raise StellarPermissionError("This credential cannot list accessible Stellar Cyber tenants.")
+        if response.status_code >= 400:
+            raise StellarAPIError(
+                f"Stellar Cyber tenant request failed with HTTP {response.status_code}."
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise StellarAPIError("Stellar Cyber tenant API did not return valid JSON.") from exc
+
+        items = payload if isinstance(payload, list) else payload.get("data", []) if isinstance(payload, dict) else []
+        tenants: list[dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            tenant_id = item.get("cust_id") or item.get("tenantid") or item.get("id")
+            tenant_name = item.get("cust_name") or item.get("tenant_name") or item.get("name")
+            if tenant_id and tenant_name:
+                tenants.append({"id": str(tenant_id), "name": str(tenant_name)})
+        tenants.sort(key=lambda item: item["name"].casefold())
+        return tenants
 
     async def search(self, index: str, body: dict[str, Any]) -> dict[str, Any]:
         encoded_index = quote(index, safe="*,-._")
@@ -210,7 +280,7 @@ class StellarClient:
                             "GET",
                             url,
                             headers={**headers, "Content-Type": "application/json"},
-                            json=body,
+                            json=self._tenant_scoped_body(body),
                         )
                     if response.status_code != 401 or attempt == 1:
                         break
