@@ -119,17 +119,18 @@
         </div>
         <div class="source-header">
           <div>
-            <label>Data sources</label>
-            <p class="hint">Select one or more Stellar Cyber data types. Internal index names are mapped automatically.</p>
+            <label>Data sources <span class="required-badge">Required</span></label>
+            <p class="hint">At least one data source must remain selected. Alerts is selected by default. Internal index names are mapped automatically.</p>
           </div>
           <div class="row">
             <button id="selectAllSources" class="button secondary small" type="button">Select all</button>
-            <button id="clearSources" class="button secondary small" type="button">Clear</button>
+            <button id="clearSources" class="button secondary small" type="button">Alerts only</button>
           </div>
         </div>
         <div id="sourceGrid" class="source-grid">
           <div class="muted">Loading data sources…</div>
         </div>
+        <div id="sourceStatus" class="status hidden"></div>
         <div class="grid two">
           <label class="advanced-only">Time field
             <input id="timeField" value="timestamp" spellcheck="false" />
@@ -182,7 +183,7 @@
           </div>
         </div>
         <div class="query-mode-grid">
-          <label class="query-mode selected"><input type="radio" name="queryMode" value="elasticsearch_dsl" checked /><span><b>Elasticsearch DSL</b><small>JSON query body for advanced control.</small></span></label>
+          <label class="query-mode selected"><input type="radio" name="queryMode" value="elasticsearch_dsl" checked /><span><b>Elasticsearch DSL</b><small>Root Scope only. JSON query body for advanced control.</small></span></label>
           <label class="query-mode"><input type="radio" name="queryMode" value="stellar_lucene" /><span><b>Stellar Cyber Query</b><small>Lucene syntax used by Stellar Cyber Search and Query Builder.</small></span></label>
         </div>
         <div id="elasticQueryPanel">

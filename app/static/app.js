@@ -1511,8 +1511,8 @@ function updateAuthModeUI() {
     ? "Enter User Scope API Key"
     : "Enter Root Scope All-Access Token";
   $("authHint").textContent = userScope
-    ? "User Scope uses the API Key directly to obtain a short-lived JWT. Raw-data query and export use Stellar Cyber Query (Lucene)."
-    : "Root Scope uses account email + All-Access Token. JWT refresh is automatic during long exports.";
+    ? "User Scope uses the API Key directly to obtain a short-lived JWT. Raw-data query and export use Stellar Cyber Query (Lucene); Elasticsearch DSL API queries are Root Scope only."
+    : "Root Scope uses account email + All-Access Token. JWT refresh is automatic during long exports, and Elasticsearch DSL is available.";
 
   document.querySelectorAll('input[name="authMode"]').forEach((radio) => {
     radio.closest(".query-mode")?.classList.toggle("selected", radio.checked);
@@ -2039,9 +2039,17 @@ async function runExport() {
   }
 }
 
+function defaultSourceId(items = state.sourceCatalog) {
+  if (!items.length) return "";
+  return items.find((item) => item.id === "alerts")?.id || items[0].id;
+}
+
 function renderSources(items) {
   const grid = $("sourceGrid");
-  const desired = new Set(state.pendingProfileSources || ["alerts"]);
+  const requested = Array.isArray(state.pendingProfileSources) ? state.pendingProfileSources : ["alerts"];
+  const desired = new Set(requested);
+  const fallback = defaultSourceId(items);
+  if (!items.some((item) => desired.has(item.id)) && fallback) desired.add(fallback);
   grid.innerHTML = items.map((item, index) => {
     const checked = desired.has(item.id) ? "checked" : "";
     return `<label class="source-option ${checked ? "selected" : ""}">
@@ -2056,6 +2064,19 @@ function renderSources(items) {
 
   grid.querySelectorAll('input[name="source"]').forEach((input) => {
     input.addEventListener("change", () => {
+      if (!input.checked && selectedSources().length === 0) {
+        input.checked = true;
+        input.closest(".source-option")?.classList.add("selected");
+        setStatus(
+          "sourceStatus",
+          "At least one data source is required. Select another source before removing this one.",
+          "warning",
+        );
+        updateSummary();
+        return;
+      }
+      $("sourceStatus").className = "status hidden";
+      $("sourceStatus").textContent = "";
       clearQueryResultState();
       input.closest(".source-option")?.classList.toggle("selected", input.checked);
       updateSummary();
@@ -2083,6 +2104,20 @@ function setAllSources(checked) {
     input.checked = checked;
     input.closest(".source-option")?.classList.toggle("selected", checked);
   });
+  updateSummary();
+  refreshIndexPlan();
+}
+
+function resetSourcesToDefault() {
+  const fallback = defaultSourceId();
+  clearQueryResultState();
+  document.querySelectorAll('input[name="source"]').forEach((input) => {
+    const checked = input.value === fallback;
+    input.checked = checked;
+    input.closest(".source-option")?.classList.toggle("selected", checked);
+  });
+  $("sourceStatus").className = "status hidden";
+  $("sourceStatus").textContent = "";
   updateSummary();
   refreshIndexPlan();
 }
@@ -2141,7 +2176,7 @@ function initialize() {
     radio.addEventListener("change", updateRecordLimitUI);
   });
   $("selectAllSources").addEventListener("click", () => setAllSources(true));
-  $("clearSources").addEventListener("click", () => setAllSources(false));
+  $("clearSources").addEventListener("click", resetSourcesToDefault);
   $("fieldSearch").addEventListener("input", renderFieldSelector);
   $("selectAllFields").addEventListener("click", () => {
     state.selectedFields = [...state.previewFields];
