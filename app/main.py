@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
 import os
 import re
+import secrets
 import tempfile
 import time
 import uuid
@@ -16,8 +18,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
 from . import __version__
 from .destinations import (
@@ -89,6 +91,14 @@ SCHEDULE_POLL_SECONDS = max(
     1.0,
     float(os.environ.get("STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS", "30")),
 )
+LARGE_EXPORT_WARNING_RECORDS = max(
+    1,
+    int(os.environ.get("STELLAR_EXPORTER_LARGE_EXPORT_WARNING_RECORDS", "100000")),
+)
+LARGE_EXPORT_CRITICAL_RECORDS = max(
+    LARGE_EXPORT_WARNING_RECORDS,
+    int(os.environ.get("STELLAR_EXPORTER_LARGE_EXPORT_CRITICAL_RECORDS", "1000000")),
+)
 JOB_STORE = JobStore(JOB_DB_PATH)
 JOB_STORE.recover_interrupted()
 SCHEDULE_STORE = ScheduleStore(SCHEDULE_DB_PATH)
@@ -146,6 +156,57 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Stellar Data Exporter", version=__version__, lifespan=lifespan)
 
 
+def _web_auth_credentials() -> tuple[str, str] | None:
+    disabled = os.environ.get("STELLAR_EXPORTER_UI_AUTH_DISABLED", "").strip().lower()
+    if disabled in {"1", "true", "yes", "on"}:
+        return None
+
+    username = (
+        os.environ.get("STELLAR_EXPORTER_UI_USERNAME")
+        or os.environ.get("STELLAR_EXPORTER_WEB_USERNAME")
+        or "stellar"
+    ).strip()
+    password = (
+        os.environ.get("STELLAR_EXPORTER_UI_PASSWORD")
+        or os.environ.get("STELLAR_EXPORTER_WEB_PASSWORD")
+        or "stellar"
+    )
+    return username, password
+
+
+@app.middleware("http")
+async def require_web_basic_auth(request: Request, call_next):
+    if request.url.path == "/api/health":
+        return await call_next(request)
+    credentials = _web_auth_credentials()
+    if credentials is None:
+        return await call_next(request)
+    if not credentials[0] or not credentials[1]:
+        return PlainTextResponse(
+            "Web authentication is not configured.",
+            status_code=503,
+        )
+
+    header = request.headers.get("authorization", "")
+    username = password = ""
+    if header.lower().startswith("basic "):
+        try:
+            decoded = base64.b64decode(header.split(" ", 1)[1], validate=True).decode("utf-8")
+            username, password = decoded.split(":", 1)
+        except (ValueError, UnicodeDecodeError):
+            username = password = ""
+
+    expected_username, expected_password = credentials
+    valid = secrets.compare_digest(username, expected_username) and secrets.compare_digest(password, expected_password)
+    if not valid:
+        return PlainTextResponse(
+            "Authentication required",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Stellar Data Exporter", charset="UTF-8"'},
+        )
+    return await call_next(request)
+
+
 def client_for(
     payload: ConnectionInput | QueryInput,
     *,
@@ -160,6 +221,7 @@ def client_for(
         auth_mode=payload.auth_mode,
         query_mode=getattr(payload, "query_mode", "stellar_lucene" if payload.auth_mode == "user_scope" else "elasticsearch_dsl"),
         stellar_query=getattr(payload, "stellar_query", None),
+        tenant_id=getattr(payload, "tenant_id", None),
     )
 
 
@@ -190,6 +252,7 @@ def resume_fingerprint(payload: ExportInput) -> str:
         "host": str(payload.host),
         "auth_mode": payload.auth_mode,
         "sources": [getattr(source, "value", str(source)) for source in payload.sources],
+        "tenant_id": payload.tenant_id,
         "time_field": payload.time_field,
         "start": payload.start.isoformat(),
         "end": payload.end.isoformat(),
@@ -224,6 +287,7 @@ def overlap_fingerprint(payload: ExportInput) -> str:
         "host": str(payload.host),
         "auth_mode": payload.auth_mode,
         "sources": [getattr(source, "value", str(source)) for source in payload.sources],
+        "tenant_id": payload.tenant_id,
         "time_field": payload.time_field,
         "query_mode": payload.query_mode,
         "query": payload.query,
@@ -253,6 +317,7 @@ def sanitized_export_metadata(payload: ExportInput) -> dict[str, Any]:
         "host": str(payload.host),
         "auth_mode": payload.auth_mode,
         "sources": [getattr(source, "value", str(source)) for source in payload.sources],
+        "tenant_id": payload.tenant_id,
         "start": payload.start.isoformat(),
         "end": payload.end.isoformat(),
         "query_mode": payload.query_mode,
@@ -998,16 +1063,20 @@ def stellar_http_error(exc: StellarAPIError) -> HTTPException:
 
 @app.post("/api/connection/test")
 async def test_connection(payload: ConnectionInput) -> dict[str, Any]:
-    body = {"size": 0, "track_total_hits": False, "query": {"match_all": {}}}
-    indices = resolve_indices(payload.sources)
     try:
-        response = await client_for(payload).search(indices, body)
+        tenants = await client_for(payload).list_tenants()
     except StellarAPIError as exc:
         raise stellar_http_error(exc) from exc
+    if not tenants:
+        raise HTTPException(
+            status_code=403,
+            detail="The credential authenticated successfully but no accessible tenants were returned.",
+        )
     return {
         "ok": True,
         "sources": source_labels(payload.sources),
-        "took_ms": response.get("took"),
+        "tenant_count": len(tenants),
+        "tenants": tenants,
     }
 
 
@@ -1034,6 +1103,58 @@ async def index_plan(payload: IndexPlanInput) -> dict[str, Any]:
         start=payload.start,
         end=payload.end,
     ).as_dict()
+
+
+@app.post("/api/query/count")
+async def query_count(payload: QueryInput) -> dict[str, Any]:
+    raw_query = compile_user_query(
+        payload.query_mode,
+        payload.query,
+        payload.stellar_query,
+    )
+    body = build_document_query(
+        raw_query,
+        time_field=payload.time_field,
+        start=payload.start,
+        end=payload.end,
+        size=0,
+        track_total_hits=True,
+    )
+    indices = plan_indices(payload.sources, start=payload.start, end=payload.end).target
+    try:
+        response = await client_for(payload).search(indices, body)
+    except StellarAPIError as exc:
+        raise stellar_http_error(exc) from exc
+
+    total, exact = total_hits(response)
+    if total >= LARGE_EXPORT_CRITICAL_RECORDS:
+        warning_level = "critical"
+        warning = (
+            "This query matches a very large data set. Continuing may cause significant "
+            "performance degradation on Stellar Cyber and the Exporter. Reduce the time "
+            "range, query, or selected data sources unless this export is necessary."
+        )
+    elif total >= LARGE_EXPORT_WARNING_RECORDS:
+        warning_level = "warning"
+        warning = (
+            "This query matches a large data set. Continuing may cause performance "
+            "degradation on Stellar Cyber and the Exporter. Consider reducing the time "
+            "range, query, or selected data sources."
+        )
+    else:
+        warning_level = "normal"
+        warning = None
+
+    return {
+        "ok": True,
+        "total": total,
+        "total_exact": exact,
+        "took_ms": response.get("took"),
+        "warning_level": warning_level,
+        "warning": warning,
+        "warning_threshold": LARGE_EXPORT_WARNING_RECORDS,
+        "critical_threshold": LARGE_EXPORT_CRITICAL_RECORDS,
+    }
 
 
 @app.post("/api/query/preview")

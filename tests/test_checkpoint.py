@@ -18,6 +18,7 @@ def remote_payload():
         "email": "admin@example.test",
         "token": "stellar-secret",
         "sources": ["alerts"],
+        "tenant_id": "tenant-1",
         "start": start.isoformat(),
         "end": (start + timedelta(minutes=5)).isoformat(),
         "format": "json",

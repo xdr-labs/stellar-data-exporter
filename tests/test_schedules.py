@@ -18,6 +18,7 @@ def remote_export():
         "email": "admin@example.test",
         "token": "stellar-secret",
         "sources": ["alerts"],
+        "tenant_id": "tenant-1",
         "start": (end - timedelta(minutes=5)).isoformat(),
         "end": end.isoformat(),
         "query": {"query": {"term": {"severity": 90}}},

@@ -9,12 +9,12 @@ User
   -> HTTPS 443
   -> Nginx
        - TLS 1.2/1.3
-       - HTTP Basic authentication
        - per-client API rate limiting
        - security headers
   -> 127.0.0.1:8787
   -> Stellar Data Exporter
-       - Stellar Cyber API
+       - application HTTP Basic authentication
+       - tenant-scoped Stellar Cyber API access
        - S3/SFTP destinations
        - /var/lib/stellar-data-exporter persistent state
 ```
@@ -66,18 +66,28 @@ certificate is not a production certificate.
 
 ## 3. Access boundary
 
-Create an Nginx Basic Auth file. The password must not be stored in this repository:
+The exporter itself protects every UI/API route except `/api/health` with HTTP Basic Auth.
+The built-in development defaults are:
 
-```bash
-read -rsp 'Exporter password: ' EXPORTER_PASSWORD; echo
-HASH="$(openssl passwd -6 "$EXPORTER_PASSWORD")"
-unset EXPORTER_PASSWORD
-printf 'exporter:%s\n' "$HASH" | sudo tee /etc/stellar-data-exporter/htpasswd >/dev/null
-sudo chmod 0600 /etc/stellar-data-exporter/htpasswd
-sudo chown root:www-data /etc/stellar-data-exporter/htpasswd
+```text
+username: stellar
+password: stellar
 ```
 
-If the distribution provides the `htpasswd` utility, it may be used instead.
+For an Internet-reachable deployment, override both values in
+`/etc/stellar-data-exporter/exporter.env` and keep that file root-owned mode `0600`:
+
+```bash
+STELLAR_EXPORTER_UI_USERNAME=<username>
+STELLAR_EXPORTER_UI_PASSWORD=<strong-password>
+```
+
+Do not add a second independent Nginx Basic Auth layer unless it intentionally uses the same
+credentials and forwards the Authorization header. A second mismatched Basic Auth layer causes
+double prompts or backend HTTP 401 responses.
+
+`STELLAR_EXPORTER_UI_AUTH_DISABLED=1` is only for isolated test automation and must not be set
+on a production deployment.
 
 ## 4. Nginx
 
@@ -141,23 +151,29 @@ Validate the loopback service from the host:
 curl --fail http://127.0.0.1:8787/api/health
 ```
 
-Validate the authenticated public endpoint:
+Validate the public health endpoint and the authenticated application root:
 
 ```bash
-curl --fail --user exporter https://exporter.example.com/api/health
+curl --fail https://exporter.example.com/api/health
+curl --fail --user stellar:stellar https://exporter.example.com/
 ```
+
+Use the configured production username/password instead of the defaults when overrides are set.
 
 Then verify in the browser:
 
-1. Basic and Advanced modes load.
-2. Connection Test succeeds against the intended Stellar Cyber instance.
-3. Preview succeeds for a narrow range.
-4. A small browser export succeeds.
-5. S3/SFTP destination test succeeds.
-6. A small remote export succeeds.
-7. Export History survives a service restart.
-8. If schedules are enabled, create one paused schedule, Run now once, verify the remote object,
-   restart the service, verify schedule state, then delete the test schedule.
+1. The browser requires HTTP Basic Auth before the UI loads.
+2. Basic and Advanced modes load after authentication.
+3. Connection Test succeeds against the intended Stellar Cyber instance and loads accessible tenants.
+4. Select exactly one tenant and confirm the summary shows that tenant.
+5. Preview succeeds for a narrow range and returned records belong to the selected tenant.
+6. Click Run export and confirm the count preflight appears before the export job starts.
+7. A small browser export succeeds.
+8. S3/SFTP destination test succeeds.
+9. A small remote export succeeds.
+10. Export History survives a service restart.
+11. If schedules are enabled, create one paused schedule, Run now once, verify the remote object,
+    restart the service, verify schedule state, then delete the test schedule.
 
 ## 8. Upgrade
 

@@ -16,6 +16,7 @@ def export_payload(destination):
         "token": "stellar-token-must-not-persist",
         "verify_tls": True,
         "sources": ["alerts"],
+        "tenant_id": "tenant-1",
         "time_field": "timestamp",
         "start": start.isoformat(),
         "end": (start + timedelta(minutes=5)).isoformat(),

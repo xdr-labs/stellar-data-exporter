@@ -51,6 +51,7 @@ def payload():
         "token": "test-token",
         "verify_tls": True,
         "sources": ["alerts"],
+        "tenant_id": "tenant-1",
         "time_field": "timestamp",
         "start": start.isoformat(),
         "end": end.isoformat(),
@@ -409,14 +410,16 @@ def test_persistent_export_history_survives_memory_reset_without_secrets(monkeyp
 def test_user_scope_connection_accepts_api_key_without_email(monkeypatch):
     captured = {}
 
-    async def user_scope_search(self, index, body):
+    async def user_scope_tenants(self):
         captured["auth_mode"] = self.auth_mode
         captured["email"] = self.email
         captured["query_mode"] = self.query_mode
-        captured["index"] = index
-        return {"took": 3, "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}}
+        return [
+            {"id": "tenant-1", "name": "Tenant One"},
+            {"id": "tenant-2", "name": "Tenant Two"},
+        ]
 
-    monkeypatch.setattr(StellarClient, "search", user_scope_search)
+    monkeypatch.setattr(StellarClient, "list_tenants", user_scope_tenants)
     response = TestClient(app).post(
         "/api/connection/test",
         json={
@@ -430,9 +433,86 @@ def test_user_scope_connection_accepts_api_key_without_email(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
+    assert response.json()["tenant_count"] == 2
+    assert response.json()["tenants"][0] == {"id": "tenant-1", "name": "Tenant One"}
     assert captured == {
         "auth_mode": "user_scope",
         "email": None,
         "query_mode": "stellar_lucene",
-        "index": "aella-ser-*",
     }
+
+
+def test_query_count_preflight_reports_warning_levels(monkeypatch):
+    totals = iter([50, 100, 1000])
+
+    async def count_search(self, index, body):
+        assert self.tenant_id == "tenant-1"
+        assert body["size"] == 0
+        assert body["track_total_hits"] is True
+        return {
+            "took": 7,
+            "hits": {
+                "total": {"value": next(totals), "relation": "eq"},
+                "hits": [],
+            },
+        }
+
+    monkeypatch.setattr(StellarClient, "search", count_search)
+    monkeypatch.setattr(main_app, "LARGE_EXPORT_WARNING_RECORDS", 100)
+    monkeypatch.setattr(main_app, "LARGE_EXPORT_CRITICAL_RECORDS", 1000)
+    client = TestClient(app)
+
+    normal = client.post("/api/query/count", json=payload())
+    warning = client.post("/api/query/count", json=payload())
+    critical = client.post("/api/query/count", json=payload())
+
+    assert normal.status_code == 200
+    assert normal.json()["total"] == 50
+    assert normal.json()["warning_level"] == "normal"
+    assert normal.json()["warning"] is None
+
+    assert warning.status_code == 200
+    assert warning.json()["total"] == 100
+    assert warning.json()["warning_level"] == "warning"
+    assert "performance" in warning.json()["warning"].lower()
+
+    assert critical.status_code == 200
+    assert critical.json()["total"] == 1000
+    assert critical.json()["warning_level"] == "critical"
+    assert "significant" in critical.json()["warning"].lower()
+
+
+def test_query_requires_tenant_selection():
+    request = payload()
+    request.pop("tenant_id")
+    response = TestClient(app).post("/api/query/count", json=request)
+
+    assert response.status_code == 422
+    assert "tenant_id" in response.text
+
+
+def test_web_basic_auth_protects_ui_and_api_but_not_health(monkeypatch):
+    monkeypatch.setenv("STELLAR_EXPORTER_UI_AUTH_DISABLED", "0")
+    monkeypatch.setenv("STELLAR_EXPORTER_UI_USERNAME", "test-ui-user")
+    monkeypatch.setenv("STELLAR_EXPORTER_UI_PASSWORD", "test-ui-password")
+    client = TestClient(app)
+
+    health = client.get("/api/health")
+    assert health.status_code == 200
+
+    blocked_ui = client.get("/")
+    assert blocked_ui.status_code == 401
+    assert blocked_ui.headers["www-authenticate"].startswith("Basic ")
+
+    blocked_api = client.get("/api/data-sources")
+    assert blocked_api.status_code == 401
+
+    wrong = client.get("/", auth=("test-ui-user", "wrong"))
+    assert wrong.status_code == 401
+
+    allowed_ui = client.get("/", auth=("test-ui-user", "test-ui-password"))
+    assert allowed_ui.status_code == 200
+    assert "Stellar Cyber Data Exporter" in allowed_ui.text
+
+    allowed_api = client.get("/api/data-sources", auth=("test-ui-user", "test-ui-password"))
+    assert allowed_api.status_code == 200

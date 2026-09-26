@@ -43,23 +43,27 @@ Stellar Data Exporter provides a Web UI for searching Stellar Cyber raw data acr
 
 ```mermaid
 flowchart LR
-    C["Connect<br/>Root or User Scope"] --> S["Select data<br/>+ time range"]
+    C["Connect<br/>Root or User Scope"] --> T["Select one tenant"]
+    T --> S["Select data<br/>+ time range"]
     S --> Q["Enter query"]
     Q --> P["Preview"]
     P --> O["Choose format<br/>+ destination"]
-    O --> E["Export"]
+    O --> K["Count preflight"]
+    K --> E["Confirm if large<br/>then export"]
     E --> D["Download / S3 / SFTP"]
 ```
 
 ## Everyday workflow
 
-1. Enter the Stellar Cyber host.
-2. Choose the credential type you were issued.
-3. Select one or more data sources and the time range.
-4. Enter an Elasticsearch DSL or Stellar Cyber query.
-5. Run **Preview** and confirm the matching records.
-6. Choose CSV, JSON, or NDJSON and the destination.
-7. Run the export and monitor progress.
+1. Open the exporter and authenticate with the UI account. The development default is `stellar` / `stellar`.
+2. Enter the Stellar Cyber host and choose the credential type you were issued.
+3. Run **Test connection**, then select exactly one accessible tenant.
+4. Select one or more data sources and the time range.
+5. Enter an Elasticsearch DSL or Stellar Cyber query.
+6. Run **Preview** and confirm the matching records.
+7. Choose CSV, JSON, or NDJSON and the destination.
+8. Click **Run export**. The exporter performs a count-only preflight before creating the export job.
+9. If the matched count is large, review the performance warning and explicitly confirm before the export starts.
 
 For the full operator walkthrough, see the **[Stellar Data Exporter User Guide](https://xdr.ooo/products/stellar-data-exporter-guide)**.
 
@@ -98,6 +102,10 @@ Open:
 ```text
 http://127.0.0.1:8787
 ```
+
+The application requires HTTP Basic Auth on the UI and API. The development defaults are
+`stellar` / `stellar`. Override them with `STELLAR_EXPORTER_UI_USERNAME` and
+`STELLAR_EXPORTER_UI_PASSWORD` before an Internet-reachable deployment.
 
 Check the service:
 
@@ -158,6 +166,8 @@ Advanced mode exposes tuning controls such as field selection, delimiter/header 
 
 The exporter uses half-open time ranges and adaptive slicing to avoid sending one oversized raw-data request for a large time window.
 
+Before any interactive export job is created, the exporter runs a count-only preflight scoped to the selected tenant, data sources, time range, and query. Large matches require explicit confirmation before the export begins. The default warning threshold is 100,000 records and the critical threshold is 1,000,000 records; both are configurable with environment variables.
+
 It can also:
 
 - show live records/bytes/query/retry progress
@@ -169,11 +179,14 @@ It can also:
 
 ## Security boundary
 
+- The UI and API require HTTP Basic Auth by default; only `/api/health` is unauthenticated.
+- The development login defaults to `stellar` / `stellar`; override it with `STELLAR_EXPORTER_UI_USERNAME` and `STELLAR_EXPORTER_UI_PASSWORD` before production exposure.
+- Stellar Cyber credentials are used only after the user selects exactly one accessible tenant; Preview, count, export, resume, and schedules remain tenant-scoped.
 - Credentials are excluded from browser-saved profiles and persistent job history.
 - One-time credentials are held in memory for normal interactive exports.
 - TLS verification is enabled by default.
 - Scheduled remote exports require encrypted credential storage; provide a production master key when using this feature.
-- The project does not provide an application-level multi-user isolation layer.
+- The shared Basic Auth gate is not a per-user authorization or multi-user isolation layer.
 - Do not expose the development Uvicorn listener directly to the public Internet.
 
 For production-oriented Nginx/systemd guidance, see [docs/PRODUCTION.md](docs/PRODUCTION.md).
