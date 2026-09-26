@@ -37,7 +37,7 @@ Stellar Data Exporter provides a Web UI for searching Stellar Cyber raw data acr
 | **Export formats** | CSV, JSON Array, or NDJSON |
 | **Destinations** | Browser download, S3-compatible object storage, or SFTP |
 | **Large exports** | Adaptive time slicing, record limits, gzip, file splitting, progress, cancellation, and retry/resume |
-| **Operator workflow** | Saved non-secret profiles, query history/favorites, export history, and optional scheduled remote exports |
+| **Operator workflow** | Optional encrypted Stellar Cyber connection save, saved non-secret profiles, query history/favorites, export history, and scheduled remote exports |
 
 ## Workflow
 
@@ -182,8 +182,9 @@ It can also:
 - The UI and API require HTTP Basic Auth by default; only `/api/health` is unauthenticated.
 - The development login defaults to `stellar` / `stellar`; override it with `STELLAR_EXPORTER_UI_USERNAME` and `STELLAR_EXPORTER_UI_PASSWORD` before production exposure.
 - Stellar Cyber credentials are used only after the user selects exactly one accessible tenant; Preview, count, export, resume, and schedules remain tenant-scoped.
-- Credentials are excluded from browser-saved profiles and persistent job history.
-- One-time credentials are held in memory for normal interactive exports.
+- By default, interactive credentials remain session-only. If the user explicitly presses **Save connection**, Host/Auth/Credential/TLS/Tenant settings are encrypted at rest on the exporter server and restored on the next visit.
+- **Clear saved** deletes the encrypted saved connection without changing the values already loaded in the current browser session.
+- Credentials are excluded from browser-saved export profiles and persistent job history.
 - TLS verification is enabled by default.
 - Scheduled remote exports require encrypted credential storage; provide a production master key when using this feature.
 - The shared Basic Auth gate is not a per-user authorization or multi-user isolation layer.

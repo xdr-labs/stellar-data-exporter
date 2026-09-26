@@ -16,6 +16,9 @@ const state = {
   pendingProfileSources: null,
   pendingSelectedFields: null,
   tenants: [],
+  savedTenantId: "",
+  savedTenantName: "",
+  savedConnectionExists: false,
 };
 
 const PROFILE_STORAGE_KEY = "stellarDataExporter.profiles.v1";
@@ -133,6 +136,21 @@ function selectedTenantName() {
   return state.tenants.find((tenant) => tenant.id === tenantId)?.name || "";
 }
 
+function updateSaveConnectionAvailability() {
+  const button = $("saveConnection");
+  if (!button) return;
+  const authMode = selectedAuthMode();
+  const ready = Boolean(
+    $("host")?.value.trim()
+    && $("token")?.value.trim()
+    && selectedTenantId()
+    && (authMode === "user_scope" || $("email")?.value.trim())
+  );
+  button.disabled = !ready;
+  const clearButton = $("clearSavedConnection");
+  if (clearButton) clearButton.disabled = !state.savedConnectionExists;
+}
+
 function clearQueryResultState() {
   state.previewTotal = null;
   state.previewLatencyMs = null;
@@ -155,6 +173,7 @@ function invalidateTenantSelection(message = "Test connection to load tenants") 
     select.innerHTML = '<option value="">' + escapeHtml(message) + '</option>';
   }
   $("tenantStatus")?.classList.add("hidden");
+  updateSaveConnectionAvailability();
   updateSummary();
 }
 
@@ -167,20 +186,40 @@ function renderTenants(tenants) {
     setStatus("tenantStatus", "No accessible tenants were returned for this credential.", "error");
     return;
   }
-  const autoSelect = state.tenants.length === 1;
+  const restoredTenant = state.savedTenantId
+    ? state.tenants.find((tenant) => tenant.id === state.savedTenantId)
+    : null;
+  const autoSelect = state.tenants.length === 1 || Boolean(restoredTenant);
   const options = state.tenants.map((tenant) =>
     '<option value="' + escapeHtml(tenant.id) + '">' + escapeHtml(tenant.name) + '</option>'
   ).join("");
   select.innerHTML = autoSelect ? options : '<option value="">Select one tenant…</option>' + options;
   select.disabled = false;
-  if (autoSelect) select.value = state.tenants[0].id;
+  if (restoredTenant) {
+    select.value = restoredTenant.id;
+  } else if (state.tenants.length === 1) {
+    select.value = state.tenants[0].id;
+  }
+  const selectedName = selectedTenantName();
   setStatus(
     "tenantStatus",
-    autoSelect
-      ? "1 tenant found and selected: " + state.tenants[0].name + "."
+    selectedName
+      ? (restoredTenant
+          ? "Saved tenant restored: " + selectedName + "."
+          : "1 tenant found and selected: " + selectedName + ".")
       : state.tenants.length.toLocaleString() + " tenants available. Select exactly one tenant before querying or exporting.",
-    autoSelect ? "success" : "warning",
+    selectedName ? "success" : "warning",
   );
+  if (state.savedTenantId && !restoredTenant) {
+    setStatus(
+      "savedConnectionStatus",
+      "Saved connection loaded, but its tenant is no longer accessible with this credential. Select another tenant and save again.",
+      "warning",
+    );
+    state.savedTenantId = "";
+    state.savedTenantName = "";
+  }
+  updateSaveConnectionAvailability();
   updateSummary();
 }
 
@@ -1179,6 +1218,125 @@ function updateSftpAuthUI() {
   $("sftpKeyLabel").classList.toggle("hidden", isPassword);
 }
 
+function savedConnectionPayload() {
+  const authMode = selectedAuthMode();
+  const host = $("host").value.trim();
+  const token = $("token").value.trim();
+  const tenantId = selectedTenantId();
+  const tenantName = selectedTenantName();
+  const email = $("email").value.trim();
+
+  if (!host || !token) {
+    throw new Error(authMode === "user_scope"
+      ? "Host and User API Key are required."
+      : "Host, account email, and All-Access Token are required.");
+  }
+  if (authMode === "root_scope" && !email) {
+    throw new Error("Account email is required for Root Scope.");
+  }
+  if (!tenantId || !tenantName) {
+    throw new Error("Test the connection and select exactly one tenant before saving.");
+  }
+  return {
+    host,
+    auth_mode: authMode,
+    email: authMode === "root_scope" ? email : null,
+    token,
+    verify_tls: $("verifyTls").checked,
+    tenant_id: tenantId,
+    tenant_name: tenantName,
+  };
+}
+
+async function saveConnectionSettings() {
+  const button = $("saveConnection");
+  try {
+    setBusy(button, true, "Saving…");
+    const payload = savedConnectionPayload();
+    await api("/api/settings/stellar-connection", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    state.savedTenantId = payload.tenant_id;
+    state.savedTenantName = payload.tenant_name;
+    state.savedConnectionExists = true;
+    setStatus(
+      "savedConnectionStatus",
+      `Saved securely for tenant ${payload.tenant_name}. The credential is encrypted on the exporter server.`,
+      "success",
+    );
+  } catch (error) {
+    setStatus("savedConnectionStatus", error.message, "error");
+  } finally {
+    setBusy(button, false);
+    updateSaveConnectionAvailability();
+  }
+}
+
+async function clearSavedConnection() {
+  const button = $("clearSavedConnection");
+  try {
+    setBusy(button, true, "Clearing…");
+    await api("/api/settings/stellar-connection", {method: "DELETE"});
+    state.savedTenantId = "";
+    state.savedTenantName = "";
+    state.savedConnectionExists = false;
+    setStatus(
+      "savedConnectionStatus",
+      "Saved connection removed. Current session values are unchanged.",
+      "success",
+    );
+  } catch (error) {
+    setStatus("savedConnectionStatus", error.message, "error");
+  } finally {
+    setBusy(button, false);
+    updateSaveConnectionAvailability();
+  }
+}
+
+async function loadSavedConnection() {
+  try {
+    const result = await api("/api/settings/stellar-connection");
+    if (!result.saved || !result.connection) {
+      state.savedConnectionExists = false;
+      updateSaveConnectionAvailability();
+      return;
+    }
+
+    const saved = result.connection;
+    state.savedConnectionExists = true;
+    state.savedTenantId = saved.tenant_id || "";
+    state.savedTenantName = saved.tenant_name || "";
+
+    const auth = document.querySelector(
+      `input[name="authMode"][value="${saved.auth_mode || "root_scope"}"]`
+    );
+    if (auth) auth.checked = true;
+    $("host").value = saved.host || "";
+    $("email").value = saved.email || "";
+    $("token").value = saved.token || "";
+    $("verifyTls").checked = saved.verify_tls !== false;
+    updateAuthModeUI();
+    invalidateTenantSelection(
+      state.savedTenantName
+        ? `Saved tenant: ${state.savedTenantName} — test connection to restore`
+        : "Test connection to load tenants",
+    );
+    setStatus(
+      "savedConnectionStatus",
+      state.savedTenantName
+        ? `Saved connection loaded. Test connection to restore tenant ${state.savedTenantName}.`
+        : "Saved connection loaded. Test connection to restore its tenant.",
+      "success",
+    );
+    state.savedConnectionExists = true;
+    updateSaveConnectionAvailability();
+    updateSummary();
+  } catch (error) {
+    setStatus("savedConnectionStatus", error.message, "error");
+  }
+}
+
 function updateSummary() {
   const host = $("host").value.trim();
   $("summaryHost").textContent = host ? host.replace(/^https?:\/\//, "") : "Not set";
@@ -1877,6 +2035,8 @@ function initialize() {
   $("basicMode").addEventListener("click", () => setUiMode("basic", true));
   $("advancedMode").addEventListener("click", () => setUiMode("advanced"));
   $("testConnection").addEventListener("click", testConnection);
+  $("saveConnection").addEventListener("click", saveConnectionSettings);
+  $("clearSavedConnection").addEventListener("click", clearSavedConnection);
   $("testDestination").addEventListener("click", () => testRemoteDestination("destinationStatus", "testDestination"));
   $("testSftpDestination").addEventListener("click", () => testRemoteDestination("sftpDestinationStatus", "testSftpDestination"));
   $("validateQuery").addEventListener("click", validateQuery);
@@ -1932,10 +2092,20 @@ function initialize() {
   });
   $("sftpAuthMethod").addEventListener("change", updateSftpAuthUI);
   const invalidateCredentialTenant = () => {
+    state.savedTenantId = "";
+    state.savedTenantName = "";
     if (state.tenants.length || !$("tenantSelect").disabled) {
       invalidateTenantSelection("Credentials changed — test connection again");
       setStatus("tenantStatus", "Connection settings changed. Test connection again to reload accessible tenants.", "warning");
     }
+    if (state.savedConnectionExists) {
+      setStatus(
+        "savedConnectionStatus",
+        "Current connection values changed. The saved copy is unchanged until you press Save connection again.",
+        "warning",
+      );
+    }
+    updateSaveConnectionAvailability();
   };
   for (const id of ["host", "email", "token"]) {
     $(id).addEventListener("input", invalidateCredentialTenant);
@@ -1957,6 +2127,7 @@ function initialize() {
         : "Select exactly one tenant before querying or exporting.",
       name ? "success" : "warning",
     );
+    updateSaveConnectionAvailability();
     updateSummary();
     renderEffectiveRequest();
   });
@@ -2004,6 +2175,8 @@ function initialize() {
   updateQueryModeUI();
   setUiMode("basic");
   updateSummary();
+  updateSaveConnectionAvailability();
+  loadSavedConnection();
   loadDataSources();
   loadExportHistory();
   loadSchedules();
