@@ -4,8 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-exec "$ROOT/.venv/bin/python" -m uvicorn app.main:app \
+exec "$ROOT/.venv/bin/python" -m app.cli \
   --host 0.0.0.0 \
-  --port 8787 \
-  --ssl-keyfile "$ROOT/.tls/dev-server.key" \
-  --ssl-certfile "$ROOT/.tls/dev-server.crt"
+  --port 8787

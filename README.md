@@ -95,32 +95,41 @@ uv sync --frozen
 uv run stellar-data-exporter
 ```
 
-The packaged launcher binds to `127.0.0.1:8787` by default.
+The packaged launcher binds to `127.0.0.1:8787` and enables HTTPS by default. On first run it creates a persistent self-signed local certificate under the exporter state directory and reuses it on later runs.
 
 Open:
 
 ```text
-http://127.0.0.1:8787
+https://127.0.0.1:8787
 ```
 
-The application requires HTTP Basic Auth on the UI and API. The development defaults are
-`stellar` / `stellar`. Override them with `STELLAR_EXPORTER_UI_USERNAME` and
-`STELLAR_EXPORTER_UI_PASSWORD` before an Internet-reachable deployment.
+or:
+
+```text
+https://localhost:8787
+```
+
+The application requires HTTP Basic Auth on the UI and API. The default login is
+`stellar` / `stellar`. Override it with `STELLAR_EXPORTER_UI_USERNAME` and
+`STELLAR_EXPORTER_UI_PASSWORD` when needed.
+
+Because the automatically generated local certificate is self-signed, a browser can show a certificate warning the first time. The connection is still HTTPS encrypted. For a trusted browser certificate, supply your own certificate with `--ssl-keyfile` and `--ssl-certfile`.
 
 Check the service:
 
 ```bash
-curl http://127.0.0.1:8787/api/health
+curl -k https://127.0.0.1:8787/api/health
 ```
 
-Development HTTPS is also available:
+To access a local install from another computer, bind to the server interfaces:
 
 ```bash
-./scripts/generate-dev-cert.sh
-./scripts/run-dev-https.sh
+uv run stellar-data-exporter --host 0.0.0.0
 ```
 
-Then open `https://localhost:8787`.
+Then open `https://<server-ip>:8787`. The generated certificate includes localhost, the server hostname, and detected local IP addresses.
+
+Use `--no-tls` only when the exporter is bound to loopback behind a TLS-terminating reverse proxy such as Nginx.
 
 ## Query modes
 

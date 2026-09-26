@@ -19,8 +19,7 @@ User
        - /var/lib/stellar-data-exporter persistent state
 ```
 
-The bundled systemd unit binds Uvicorn only to `127.0.0.1:8787`. Do not change that to
-`0.0.0.0` on an Internet-reachable host.
+The packaged CLI enables HTTPS automatically for direct local/self-hosted use. The bundled production systemd unit is the deliberate exception: it binds Uvicorn only to `127.0.0.1:8787` with `--no-tls` because Nginx terminates public TLS. Do not change that backend to `0.0.0.0` on an Internet-reachable host.
 
 ## 1. Host prerequisites
 
@@ -61,8 +60,7 @@ sudo chown root:root /etc/stellar-data-exporter/tls/privkey.pem
 sudo chmod 0600 /etc/stellar-data-exporter/tls/privkey.pem
 ```
 
-Use a CA-issued certificate for the production hostname. The repository's `.tls` development
-certificate is not a production certificate.
+Use a CA-issued certificate for the production hostname. Direct local CLI runs generate their own persistent self-signed certificate automatically; that local certificate is not a production certificate and should not replace the CA-issued Nginx certificate.
 
 ## 3. Access boundary
 
@@ -142,7 +140,7 @@ sudo systemctl status stellar-data-exporter
 ```
 
 The unit applies a restrictive filesystem/device/kernel sandbox, clears Linux capabilities, uses
-`UMask=0077`, and allows only UNIX/IPv4/IPv6 socket families required by the exporter.
+`UMask=0077`, and allows only UNIX/IPv4/IPv6 socket families required by the exporter. It passes `--no-tls` only because the listener is loopback-only and Nginx provides HTTPS on the client-facing boundary.
 
 ## 7. Production smoke test
 
