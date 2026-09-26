@@ -37,7 +37,7 @@ details{border-top:1px solid #e5e1e2;padding-top:13px}summary{cursor:pointer;fon
 @media(max-width:650px){.split-settings{grid-template-columns:1fr}}
 
 .source-index{display:inline-block;width:max-content;max-width:100%;font:10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#8b4a31;background:#fff1eb;border-radius:4px;padding:2px 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.query-editor-header{display:flex;justify-content:space-between;align-items:flex-end;margin-top:14px;margin-bottom:7px}
+.query-editor-header{display:flex;justify-content:space-between;align-items:flex-end;margin-top:14px;margin-bottom:7px}.query-scope-hint{margin:8px 2px 0}.query-scope-hint strong{color:var(--stellar-orange)}
 .managed-badge{display:inline-flex;align-items:center;margin-left:6px;padding:2px 6px;border-radius:999px;background:#fff0ea;color:var(--stellar-orange);font-size:9px;font-weight:850;letter-spacing:.04em;text-transform:uppercase;vertical-align:middle}
 .managed-badge.system{margin-left:0;background:#eeebec;color:#696367}
 .actual-request{margin-top:16px;padding:14px;border:1px solid #ddd8da;border-radius:10px;background:#faf9f9}
