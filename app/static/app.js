@@ -5,6 +5,7 @@ const state = {
   previewLatencyMs: null,
   previewBytes: null,
   estimatedBytes: null,
+  previewRows: [],
   sourceCatalog: [],
   indexPlan: null,
   indexPlanKey: null,
@@ -156,6 +157,7 @@ function clearQueryResultState() {
   state.previewLatencyMs = null;
   state.previewBytes = null;
   state.estimatedBytes = null;
+  state.previewRows = [];
   updateDiscoveredFields([]);
   const preflight = $("exportPreflight");
   if (preflight) {
@@ -509,12 +511,75 @@ function effectiveExportRecordCount() {
   }
 }
 
+function getPathValue(record, path) {
+  let current = record;
+  for (const part of path.split(".")) {
+    if (!current || typeof current !== "object" || Array.isArray(current) || !(part in current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return current;
+}
+
+function setPathValue(target, path, value) {
+  const parts = path.split(".");
+  let current = target;
+  for (const part of parts.slice(0, -1)) {
+    if (!current[part] || typeof current[part] !== "object" || Array.isArray(current[part])) {
+      current[part] = {};
+    }
+    current = current[part];
+  }
+  current[parts.at(-1)] = value;
+}
+
+function projectPreviewRow(row, fields) {
+  const projected = {};
+  for (const field of fields) {
+    const value = getPathValue(row, field);
+    if (value !== undefined) setPathValue(projected, field, value);
+  }
+  return projected;
+}
+
+function utf8JsonBytes(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+function selectedFieldSizeRatio() {
+  if (
+    !isAdvancedMode()
+    || !state.previewFields.length
+    || state.selectedFields.length === state.previewFields.length
+  ) {
+    return 1;
+  }
+  if (!state.selectedFields.length) return 0;
+  if (!state.previewRows.length) {
+    return state.selectedFields.length / state.previewFields.length;
+  }
+
+  let fullBytes = 0;
+  let projectedBytes = 0;
+  for (const row of state.previewRows) {
+    fullBytes += utf8JsonBytes(row);
+    projectedBytes += utf8JsonBytes(projectPreviewRow(row, state.selectedFields));
+  }
+  if (fullBytes <= 0) return state.selectedFields.length / state.previewFields.length;
+  return Math.min(1, Math.max(0, projectedBytes / fullBytes));
+}
+
 function estimatedOutputBytes() {
   const records = effectiveExportRecordCount();
   if (records == null || state.estimatedBytes == null || state.previewTotal == null) return null;
   const total = Number(state.previewTotal);
   if (total <= 0) return 0;
-  return Math.round(Number(state.estimatedBytes) * (records / total));
+  return Math.round(
+    Number(state.estimatedBytes)
+      * (records / total)
+      * selectedFieldSizeRatio()
+  );
 }
 
 function renderInspector(plan, target) {
@@ -1490,6 +1555,7 @@ async function previewQuery() {
     state.previewLatencyMs = result.took_ms;
     state.previewBytes = result.preview_bytes;
     state.estimatedBytes = result.estimated_bytes;
+    state.previewRows = Array.isArray(result.rows) ? result.rows : [];
     if (result.index_plan) {
       state.indexPlan = result.index_plan;
       state.indexPlanKey = currentIndexPlanKey();
@@ -1910,13 +1976,10 @@ async function runExport() {
       method: "POST",
       body: JSON.stringify(basePayload()),
     });
-    state.previewTotal = Number(countResult.total || 0);
-    state.previewLatencyMs = countResult.took_ms;
-    $("recordCount").textContent = state.previewTotal.toLocaleString();
+    const matchedTotal = Number(countResult.total || 0);
     renderExportPreflight(countResult, payload);
-    updateSummary();
 
-    if (state.previewTotal === 0) {
+    if (matchedTotal === 0) {
       setStatus(
         "runStatus",
         "No records match the selected tenant, data sources, time range and query. Export was not started.",
