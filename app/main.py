@@ -19,12 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 from . import __version__
 from .destinations import (
     build_s3_key,
     build_sftp_path,
+    get_sftp_host_key,
     test_s3,
     test_sftp,
     upload_s3,
@@ -50,10 +51,10 @@ from .models import (
     IndexPlanInput,
     QueryInput,
     S3Destination,
-    SavedConnectionInput,
     ScheduleCreateInput,
     ScheduleUpdateInput,
     SFTPDestination,
+    SFTPHostKeyLookupInput,
 )
 from .index_planner import plan_indices
 from .job_store import JobStore
@@ -88,12 +89,6 @@ SCHEDULE_KEY_PATH = Path(
         str(STATE_DIR / "schedule.key"),
     )
 )
-CONNECTION_SETTINGS_PATH = Path(
-    os.environ.get(
-        "STELLAR_EXPORTER_CONNECTION_SETTINGS_FILE",
-        str(STATE_DIR / "stellar-connection.enc"),
-    )
-)
 SCHEDULE_POLL_SECONDS = max(
     1.0,
     float(os.environ.get("STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS", "30")),
@@ -111,42 +106,6 @@ JOB_STORE.recover_interrupted()
 SCHEDULE_STORE = ScheduleStore(SCHEDULE_DB_PATH)
 SCHEDULE_CIPHER = ScheduleCipher.from_environment(SCHEDULE_KEY_PATH)
 LOGGER = logging.getLogger("stellar-data-exporter")
-
-
-def save_connection_settings(payload: SavedConnectionInput) -> None:
-    ensure_private_directory(CONNECTION_SETTINGS_PATH.parent)
-    ciphertext = SCHEDULE_CIPHER.encrypt(payload.model_dump_json().encode("utf-8"))
-    fd, temporary = tempfile.mkstemp(
-        prefix=".stellar-connection-",
-        dir=CONNECTION_SETTINGS_PATH.parent,
-    )
-    try:
-        os.write(fd, ciphertext)
-        os.fsync(fd)
-        os.fchmod(fd, 0o600)
-    finally:
-        os.close(fd)
-    os.replace(temporary, CONNECTION_SETTINGS_PATH)
-    os.chmod(CONNECTION_SETTINGS_PATH, 0o600)
-
-
-def load_connection_settings() -> SavedConnectionInput | None:
-    if not CONNECTION_SETTINGS_PATH.exists():
-        return None
-    try:
-        plaintext = SCHEDULE_CIPHER.decrypt(CONNECTION_SETTINGS_PATH.read_bytes())
-        return SavedConnectionInput.model_validate_json(plaintext)
-    except Exception as exc:
-        raise RuntimeError(
-            "Saved Stellar Cyber connection cannot be decrypted or is invalid"
-        ) from exc
-
-
-def delete_connection_settings() -> bool:
-    if not CONNECTION_SETTINGS_PATH.exists():
-        return False
-    CONNECTION_SETTINGS_PATH.unlink()
-    return True
 
 
 @dataclass
@@ -170,6 +129,9 @@ class ExportJob:
     result: str | None = None
     error: str | None = None
     completed_parts: list[dict[str, Any]] = field(default_factory=list)
+    download_path: str | None = field(default=None, repr=False)
+    download_filename: str | None = field(default=None, repr=False)
+    download_media_type: str | None = field(default=None, repr=False)
     task: asyncio.Task | None = field(default=None, repr=False)
     last_persisted_at: float = field(default=0.0, repr=False)
 
@@ -481,6 +443,8 @@ def cleanup_jobs() -> None:
             mark_job_terminal(job, "expired", "Download job expired before it was started.")
             EXPORT_JOBS.pop(job_id, None)
         elif job.status in {"completed", "failed", "cancelled", "expired", "interrupted"} and terminal_age > HISTORY_JOB_TTL_SECONDS:
+            if job.download_path and os.path.exists(job.download_path):
+                os.unlink(job.download_path)
             EXPORT_JOBS.pop(job_id, None)
 
 
@@ -678,35 +642,112 @@ def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def tracked_download_stream(
-    job: ExportJob,
-    stream,
-    *,
-    result: str,
-    cleanup_paths: list[str] | None = None,
-):
+async def write_stream_to_temp_file(stream, *, suffix: str = "") -> tuple[str, int]:
+    handle = tempfile.NamedTemporaryFile(
+        prefix="stellar-export-ready-",
+        suffix=suffix,
+        delete=False,
+    )
+    path = handle.name
+    size = 0
     try:
         async for chunk in stream:
+            handle.write(chunk)
+            size += len(chunk)
+        handle.flush()
+        os.fsync(handle.fileno())
+    except BaseException:
+        handle.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        raise
+    handle.close()
+    return path, size
+
+
+async def run_download_job(job_id: str) -> None:
+    job = EXPORT_JOBS.get(job_id)
+    if job is None or job.payload is None:
+        return
+
+    payload = job.payload
+    mark_job_started(job)
+    temporary_paths: list[str] = []
+    try:
+        if payload.max_file_size_bytes is None:
+            stream, content_type, filename = build_output(payload, job)
+            suffix = "".join(Path(filename).suffixes)
+            path, size = await write_stream_to_temp_file(stream, suffix=suffix)
             if job.cancel_requested:
                 raise ExportCancelled("Export cancelled")
-            job.bytes_sent += len(chunk)
-            yield chunk
+            job.download_path = path
+            job.download_filename = filename
+            job.download_media_type = "application/gzip" if payload.compress else content_type
+            job.bytes_sent = size
+            job.files_completed = 1
+        else:
+            parts, content_type, filename = build_output_parts(payload, job)
+            completed_parts = []
+            async for part in parts:
+                completed_parts.append(part)
+                temporary_paths.append(part.path)
+                job.files_completed += 1
+                if job.cancel_requested:
+                    raise ExportCancelled("Export cancelled")
+
+            if len(completed_parts) == 1:
+                part = completed_parts[0]
+                temporary_paths.remove(part.path)
+                job.download_path = part.path
+                job.download_filename = part.filename
+                job.download_media_type = "application/gzip" if payload.compress else content_type
+            else:
+                archive = tempfile.NamedTemporaryFile(
+                    prefix="stellar-export-ready-",
+                    suffix=".zip",
+                    delete=False,
+                )
+                archive_path = archive.name
+                archive.close()
+                with zipfile.ZipFile(
+                    archive_path,
+                    "w",
+                    compression=zipfile.ZIP_STORED,
+                ) as bundle:
+                    for part in completed_parts:
+                        bundle.write(part.path, arcname=part.filename)
+                archive_name = re.sub(
+                    r"(\.csv|\.json|\.ndjson)(\.gz)?$",
+                    "",
+                    filename,
+                    flags=re.IGNORECASE,
+                )
+                job.download_path = archive_path
+                job.download_filename = f"{archive_name}-parts.zip"
+                job.download_media_type = "application/zip"
+
+            cleanup_paths(temporary_paths)
+            temporary_paths.clear()
+            if job.download_path:
+                job.bytes_sent = os.path.getsize(job.download_path)
+
         if job.cancel_requested:
             raise ExportCancelled("Export cancelled")
-        if job.files_completed == 0:
-            job.files_completed = 1
-        job.result = result
+        job.result = job.download_filename
         mark_job_terminal(job, "completed")
     except (ExportCancelled, asyncio.CancelledError):
+        cleanup_paths(temporary_paths)
+        if job.download_path:
+            cleanup_paths([job.download_path])
+            job.download_path = None
         mark_job_terminal(job, "cancelled")
-        return
     except Exception as exc:
+        cleanup_paths(temporary_paths)
+        if job.download_path:
+            cleanup_paths([job.download_path])
+            job.download_path = None
         mark_job_terminal(job, "failed", str(exc)[:2000])
-        raise
     finally:
-        for path in cleanup_paths or []:
-            if os.path.exists(path):
-                os.unlink(path)
         job.payload = None
         job.task = None
 
@@ -1123,35 +1164,13 @@ async def test_connection(payload: ConnectionInput) -> dict[str, Any]:
     }
 
 
-@app.get("/api/settings/stellar-connection")
-async def get_saved_stellar_connection() -> dict[str, Any]:
+@app.post("/api/destination/sftp-host-key")
+async def sftp_host_key(payload: SFTPHostKeyLookupInput) -> dict[str, Any]:
     try:
-        payload = load_connection_settings()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    if payload is None:
-        return {"saved": False, "connection": None}
-    return {
-        "saved": True,
-        "connection": payload.model_dump(mode="json"),
-    }
-
-
-@app.put("/api/settings/stellar-connection")
-async def put_saved_stellar_connection(
-    payload: SavedConnectionInput,
-) -> dict[str, Any]:
-    save_connection_settings(payload)
-    return {
-        "saved": True,
-        "tenant_id": payload.tenant_id,
-        "tenant_name": payload.tenant_name,
-    }
-
-
-@app.delete("/api/settings/stellar-connection")
-async def clear_saved_stellar_connection() -> dict[str, Any]:
-    return {"deleted": delete_connection_settings()}
+        result = await get_sftp_host_key(payload.host.strip(), payload.port)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:2000]) from exc
+    return {"ok": True, **result}
 
 
 @app.post("/api/destination/test")
@@ -1408,6 +1427,7 @@ async def create_export_job(payload: ExportInput) -> dict[str, str]:
     cancel_url = f"/api/export/jobs/{job_id}/cancel"
 
     if isinstance(payload.destination, DownloadDestination):
+        job.task = asyncio.create_task(run_download_job(job_id))
         return {
             "job_id": job_id,
             "mode": "download",
@@ -1515,102 +1535,19 @@ async def download_export(job_id: str):
     job = EXPORT_JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Export job not found or expired")
+    if job.metadata.get("destination_type") != "download":
+        raise HTTPException(status_code=400, detail="This job is not a browser download")
     if job.status == "cancelled":
         raise HTTPException(status_code=409, detail="Export job was cancelled")
-    if job.status != "pending" or job.payload is None:
-        raise HTTPException(status_code=409, detail="Export job has already started")
-    if not isinstance(job.payload.destination, DownloadDestination):
-        raise HTTPException(status_code=400, detail="This job is not a browser download")
+    if job.status == "failed":
+        raise HTTPException(status_code=409, detail=job.error or "Export job failed")
+    if job.status != "completed":
+        raise HTTPException(status_code=409, detail="Export file is still being prepared")
+    if not job.download_path or not os.path.exists(job.download_path):
+        raise HTTPException(status_code=410, detail="Prepared export file is no longer available")
 
-    payload = job.payload
-    mark_job_started(job)
-
-    if payload.max_file_size_bytes is None:
-        stream, content_type, filename = build_output(payload, job)
-        media_type = "application/gzip" if payload.compress else content_type
-        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-        tracked = tracked_download_stream(job, stream, result=filename)
-        return StreamingResponse(tracked, media_type=media_type, headers=headers)
-
-    completed_paths: list[str] = []
-    archive_path: str | None = None
-    try:
-        parts, content_type, filename = build_output_parts(payload, job)
-        completed_parts = []
-        async for part in parts:
-            completed_parts.append(part)
-            completed_paths.append(part.path)
-            job.files_completed += 1
-            if job.cancel_requested:
-                raise ExportCancelled("Export cancelled")
-
-        if job.cancel_requested:
-            raise ExportCancelled("Export cancelled")
-
-        if len(completed_parts) == 1:
-            part = completed_parts[0]
-            media_type = "application/gzip" if payload.compress else content_type
-            headers = {"Content-Disposition": f'attachment; filename="{part.filename}"'}
-            tracked = tracked_download_stream(
-                job,
-                file_stream(part.path),
-                result=part.filename,
-                cleanup_paths=[part.path],
-            )
-            return StreamingResponse(tracked, media_type=media_type, headers=headers)
-
-        archive = tempfile.NamedTemporaryFile(
-            prefix="stellar-export-",
-            suffix=".zip",
-            delete=False,
-        )
-        archive_path = archive.name
-        archive.close()
-
-        with zipfile.ZipFile(
-            archive_path,
-            "w",
-            compression=zipfile.ZIP_STORED,
-        ) as bundle:
-            for part in completed_parts:
-                bundle.write(part.path, arcname=part.filename)
-
-        cleanup_paths(completed_paths)
-        completed_paths.clear()
-
-        if job.cancel_requested:
-            raise ExportCancelled("Export cancelled")
-
-        archive_name = re.sub(
-            r"(\.csv|\.json)(\.gz)?$",
-            "",
-            filename,
-            flags=re.IGNORECASE,
-        )
-        archive_name = f"{archive_name}-parts.zip"
-        headers = {"Content-Disposition": f'attachment; filename="{archive_name}"'}
-        tracked = tracked_download_stream(
-            job,
-            file_stream(archive_path),
-            result=archive_name,
-            cleanup_paths=[archive_path],
-        )
-        return StreamingResponse(
-            tracked,
-            media_type="application/zip",
-            headers=headers,
-        )
-    except (ExportCancelled, asyncio.CancelledError):
-        cleanup_paths(completed_paths)
-        cleanup_paths([archive_path] if archive_path else [])
-        job.payload = None
-        job.task = None
-        mark_job_terminal(job, "cancelled")
-        raise HTTPException(status_code=409, detail="Export job was cancelled")
-    except Exception as exc:
-        cleanup_paths(completed_paths)
-        cleanup_paths([archive_path] if archive_path else [])
-        job.payload = None
-        job.task = None
-        mark_job_terminal(job, "failed", str(exc)[:2000])
-        raise
+    return FileResponse(
+        job.download_path,
+        media_type=job.download_media_type or "application/octet-stream",
+        filename=job.download_filename or "stellar-export",
+    )

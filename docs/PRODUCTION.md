@@ -116,13 +116,10 @@ systemd creates `/var/lib/stellar-data-exporter` with mode `0700`. Runtime state
 ```text
 /var/lib/stellar-data-exporter/export-jobs.sqlite3
 /var/lib/stellar-data-exporter/export-schedules.sqlite3
-/var/lib/stellar-data-exporter/stellar-connection.enc
 /var/lib/stellar-data-exporter/schedule.key
 ```
 
-Scheduled export payloads and the optional saved Stellar Cyber connection are encrypted with Fernet. The generated
-`schedule.key` is mode `0600`, and `stellar-connection.enc` is also mode `0600`. Losing this key makes both saved schedules and the saved connection
-undecryptable.
+Scheduled export payloads are encrypted with Fernet. The generated `schedule.key` is mode `0600`. Losing this key makes saved schedules undecryptable. Interactive connection credentials are not persisted on the server and are only remembered in the current browser session when the user explicitly chooses **Remember this session**.
 
 For an externally managed key, copy `deploy/systemd/exporter.env.example` to
 `/etc/stellar-data-exporter/exporter.env`, set `STELLAR_EXPORTER_SCHEDULE_KEY`, and keep the
@@ -167,11 +164,12 @@ Then verify in the browser:
 4. Select exactly one tenant and confirm the summary shows that tenant.
 5. Preview succeeds for a narrow range and returned records belong to the selected tenant.
 6. Click Run export and confirm the count preflight appears before the export job starts.
-7. A small browser export succeeds.
-8. S3/SFTP destination test succeeds.
-9. A small remote export succeeds.
-10. Export History survives a service restart.
-11. If schedules are enabled, create one paused schedule, Run now once, verify the remote object,
+7. A small browser export succeeds; the downloaded file is non-empty and its size matches the completed job bytes/HTTP Content-Length.
+8. **Remember this session** survives refresh in the same browser session, while a separate browser session starts without the Stellar credential.
+9. For a new SFTP target, use **Get host key**, verify the SHA256 fingerprint out-of-band, click **Trust this host key**, and then run **Test destination**.
+10. A small S3/SFTP remote export succeeds.
+11. Export History survives a service restart.
+12. If schedules are enabled, create one paused schedule, Run now once, verify the remote object,
     restart the service, verify schedule state, then delete the test schedule.
 
 ## 8. Upgrade

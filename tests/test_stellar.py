@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 
+import app.stellar as stellar_module
 from app.stellar import StellarClient
 
 
@@ -213,3 +214,71 @@ async def test_root_scope_search_injects_server_side_tenant_filter():
     scoped = captured["body"]["query"]["bool"]
     assert scoped["must"] == [{"term": {"severity": 80}}]
     assert scoped["filter"] == [{"term": {"tenantid": "tenant-42"}}]
+
+
+@pytest.mark.asyncio
+async def test_search_retries_transient_connection_failure(monkeypatch):
+    calls = {"token": 0, "search": 0, "retry": 0}
+    monkeypatch.setattr(stellar_module, "QUERY_RETRY_BASE_DELAY_SECONDS", 0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/api/v1/access_token":
+            calls["token"] += 1
+            return httpx.Response(200, json={"access_token": "jwt-1"})
+        if request.url.path.endswith("/_search"):
+            calls["search"] += 1
+            if calls["search"] < 3:
+                raise httpx.ConnectError("temporary reset", request=request)
+            return httpx.Response(
+                200,
+                json={"hits": {"total": {"value": 1, "relation": "eq"}, "hits": []}},
+            )
+        raise AssertionError(f"Unexpected URL: {request.url}")
+
+    client = StellarClient(
+        "https://stellar.example.test",
+        "admin@example.test",
+        "refresh-token",
+        transport=httpx.MockTransport(handler),
+        tenant_id="tenant-1",
+        on_retry=lambda count: calls.__setitem__("retry", calls["retry"] + count),
+    )
+
+    response = await client.search("aella-ser-*", {"query": {"match_all": {}}})
+
+    assert response["hits"]["total"]["value"] == 1
+    assert calls["search"] == 3
+    assert calls["retry"] == 2
+
+
+@pytest.mark.asyncio
+async def test_search_retries_transient_http_status(monkeypatch):
+    calls = {"search": 0, "retry": 0}
+    monkeypatch.setattr(stellar_module, "QUERY_RETRY_BASE_DELAY_SECONDS", 0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/api/v1/access_token":
+            return httpx.Response(200, json={"access_token": "jwt-1"})
+        if request.url.path.endswith("/_search"):
+            calls["search"] += 1
+            if calls["search"] == 1:
+                return httpx.Response(503, json={"detail": "temporarily unavailable"})
+            return httpx.Response(
+                200,
+                json={"hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}},
+            )
+        raise AssertionError(f"Unexpected URL: {request.url}")
+
+    client = StellarClient(
+        "https://stellar.example.test",
+        "admin@example.test",
+        "refresh-token",
+        transport=httpx.MockTransport(handler),
+        tenant_id="tenant-1",
+        on_retry=lambda count: calls.__setitem__("retry", calls["retry"] + count),
+    )
+
+    response = await client.search("aella-ser-*", {"query": {"match_all": {}}})
+
+    assert response["hits"]["total"]["value"] == 0
+    assert calls == {"search": 2, "retry": 1}

@@ -37,7 +37,7 @@ Stellar Data Exporter provides a Web UI for searching Stellar Cyber raw data acr
 | **Export formats** | CSV, JSON Array, or NDJSON |
 | **Destinations** | Browser download, S3-compatible object storage, or SFTP |
 | **Large exports** | Adaptive time slicing, record limits, gzip, file splitting, progress, cancellation, and retry/resume |
-| **Operator workflow** | Optional encrypted Stellar Cyber connection save, saved non-secret profiles, query history/favorites, export history, and scheduled remote exports |
+| **Operator workflow** | Browser-session connection memory, saved non-secret profiles, query history/favorites, export history, and scheduled remote exports |
 
 ## Workflow
 
@@ -163,7 +163,7 @@ User Scope API Key mode selects this query mode automatically.
 | File controls | gzip, record limit, selected fields, numbered file splitting |
 | Browser | Direct download; split downloads can be bundled as ZIP |
 | Object storage | AWS S3, Cloudflare R2, MinIO, and other S3-compatible targets |
-| SFTP | Password or SSH private-key authentication |
+| SFTP | Password or SSH private-key authentication with SSH host-key fingerprint discovery and pinning |
 
 Advanced mode exposes tuning controls such as field selection, delimiter/header options, maximum file size, target records per slice, overlap policy, and remote-destination details.
 
@@ -175,6 +175,7 @@ Before any interactive export job is created, the exporter runs a count-only pre
 
 It can also:
 
+- automatically retry transient Stellar Cyber connection resets, timeouts, HTTP 429, and HTTP 5xx responses with exponential backoff
 - show live records/bytes/query/retry progress
 - cancel active exports
 - preserve sanitized job history
@@ -187,8 +188,8 @@ It can also:
 - The UI and API require HTTP Basic Auth by default; only `/api/health` is unauthenticated.
 - The development login defaults to `stellar` / `stellar`; override it with `STELLAR_EXPORTER_UI_USERNAME` and `STELLAR_EXPORTER_UI_PASSWORD` before production exposure.
 - Stellar Cyber credentials are used only after the user selects exactly one accessible tenant; Preview, count, export, resume, and schedules remain tenant-scoped.
-- By default, interactive credentials remain session-only. If the user explicitly presses **Save connection**, Host/Auth/Credential/TLS/Tenant settings are encrypted at rest on the exporter server and restored on the next visit.
-- **Clear saved** deletes the encrypted saved connection without changing the values already loaded in the current browser session.
+- Interactive Stellar Cyber credentials are never stored as a shared server-side connection. **Remember this session** stores Host/Auth/Credential/TLS/Tenant only in the current browser tab's session storage; it survives refresh but is not shared with other browsers/devices and disappears when that browser session ends.
+- **Clear session** removes that browser-session copy without changing values already loaded in the current form.
 - Credentials are excluded from browser-saved export profiles and persistent job history.
 - TLS verification is enabled by default.
 - Scheduled remote exports require encrypted credential storage; provide a production master key when using this feature.

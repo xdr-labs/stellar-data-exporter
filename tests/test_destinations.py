@@ -1,11 +1,18 @@
 import asyncio
 
+import asyncssh
 import pytest
 
 import app.destinations as destinations
-from app.destinations import build_s3_key, build_sftp_path, upload_s3
+from app.destinations import (
+    _sftp_connect_kwargs,
+    build_s3_key,
+    build_sftp_path,
+    sftp_known_hosts_entry,
+    upload_s3,
+)
 from app.main import safe_filename
-from app.models import S3Destination
+from app.models import S3Destination, SFTPDestination
 
 
 class FakeS3:
@@ -120,3 +127,29 @@ async def test_cancelled_multipart_s3_export_aborts_upload(monkeypatch):
     assert len(fake.parts) == 1
     assert len(fake.aborted) == 1
     assert not fake.completed
+
+
+def test_sftp_known_hosts_entry_uses_openssh_host_format():
+    key = asyncssh.generate_private_key("ssh-ed25519").export_public_key("openssh").decode().strip()
+    assert sftp_known_hosts_entry("sftp.example.test", 22, key) == f"sftp.example.test {key}"
+    assert sftp_known_hosts_entry("sftp.example.test", 2222, key) == f"[sftp.example.test]:2222 {key}"
+
+
+def test_sftp_pinned_host_key_is_used_for_connection():
+    key = asyncssh.generate_private_key("ssh-ed25519").export_public_key("openssh").decode().strip()
+    destination = SFTPDestination(
+        host="sftp.example.test",
+        port=22,
+        username="alice",
+        auth_method="password",
+        password="secret",
+        remote_path="/exports",
+        verify_host_key=True,
+        server_host_key=key,
+    )
+
+    kwargs = _sftp_connect_kwargs(destination)
+
+    assert kwargs["host"] == "sftp.example.test"
+    assert kwargs["password"] == "secret"
+    assert kwargs["known_hosts"] is not None
