@@ -19,7 +19,7 @@ User
        - /var/lib/stellar-data-exporter persistent state
 ```
 
-The packaged CLI enables HTTPS automatically for direct local/self-hosted use. The bundled production systemd unit is the deliberate exception: it binds Uvicorn only to `127.0.0.1:8787` with `--no-tls` because Nginx terminates public TLS. Do not change that backend to `0.0.0.0` on an Internet-reachable host.
+The packaged CLI enables HTTPS automatically and binds to `0.0.0.0:8787` for direct local/self-hosted use, so users on an allowed network can connect with `https://<host-ip>:8787`. The bundled production systemd unit is the deliberate exception: it binds Uvicorn only to `127.0.0.1:8787` with `--no-tls` because Nginx terminates public TLS. Do not change that production backend to `0.0.0.0` on an Internet-reachable host.
 
 ## 1. Host prerequisites
 
