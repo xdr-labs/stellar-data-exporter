@@ -111,18 +111,19 @@ exceeded.
 
 Only TCP 80/443 should be reachable from clients. TCP 8787 must remain loopback-only.
 
-## 5. Persistent state and schedule encryption key
+## 5. Persistent state and encryption key
 
 systemd creates `/var/lib/stellar-data-exporter` with mode `0700`. Runtime state is:
 
 ```text
 /var/lib/stellar-data-exporter/export-jobs.sqlite3
 /var/lib/stellar-data-exporter/export-schedules.sqlite3
+/var/lib/stellar-data-exporter/stellar-connection.enc
 /var/lib/stellar-data-exporter/schedule.key
 ```
 
-The schedule database stores its executable export payload encrypted with Fernet. The generated
-`schedule.key` is mode `0600`. Losing this key makes saved scheduled-export payloads
+Scheduled export payloads and the optional saved Stellar Cyber connection are encrypted with Fernet. The generated
+`schedule.key` is mode `0600`, and `stellar-connection.enc` is also mode `0600`. Losing this key makes both saved schedules and the saved connection
 undecryptable.
 
 For an externally managed key, copy `deploy/systemd/exporter.env.example` to
@@ -200,7 +201,7 @@ Keep the state backup until the browser smoke test passes.
 
 ## 9. Backup and restore
 
-Back up the three files together while the service is stopped. The bundled backup command creates
+Back up the complete state directory while the service is stopped. The bundled backup command creates
 the archive with mode `0600` and refuses to back up the production state directory while the
 service is active:
 
@@ -215,7 +216,7 @@ sudo systemctl start stellar-data-exporter
 
 The restore test rejects unsafe archive paths and runs SQLite `PRAGMA integrity_check` against
 the job and schedule databases when present. A restore must include the same `schedule.key`
-(or the same externally managed Fernet key) used to encrypt the schedule database.
+(or the same externally managed Fernet key) used to encrypt both scheduled exports and any saved Stellar Cyber connection.
 
 ## 10. Incident checks
 

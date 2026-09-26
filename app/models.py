@@ -24,6 +24,22 @@ class ConnectionInput(BaseModel):
         return self
 
 
+class SavedConnectionInput(BaseModel):
+    host: HttpUrl
+    auth_mode: Literal["root_scope", "user_scope"] = "root_scope"
+    email: str | None = Field(default=None, min_length=3)
+    token: str = Field(min_length=1)
+    verify_tls: bool = True
+    tenant_id: str = Field(min_length=1)
+    tenant_name: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_auth(self):
+        if self.auth_mode == "root_scope" and not self.email:
+            raise ValueError("email is required for Root Scope authentication")
+        return self
+
+
 class IndexPlanInput(BaseModel):
     sources: list[DataSourceId] = Field(min_length=1)
     start: datetime

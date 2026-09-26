@@ -23,7 +23,7 @@
         <button id="basicMode" class="ui-mode active" type="button">Basic</button>
         <button id="advancedMode" class="ui-mode" type="button">Advanced</button>
       </div>
-      <span class="secure-badge"><span class="secure-dot"></span> Session-only credentials</span>
+      <span class="secure-badge"><span class="secure-dot"></span> Encrypted saved connection</span>
     </div>
   </header>
 
@@ -39,7 +39,7 @@
       </div>
 
       <section class="card">
-        <div class="section-title"><span class="step">1</span><div><h2>Stellar Cyber</h2><p>Choose the credential type you were issued. Credentials stay in this session and are exchanged for a short-lived JWT.</p></div></div>
+        <div class="section-title"><span class="step">1</span><div><h2>Stellar Cyber</h2><p>Choose the credential type you were issued. Save the complete connection securely if you want to reuse it on the next visit.</p></div></div>
         <div class="query-mode-grid" id="authModeGrid">
           <label class="query-mode selected"><input type="radio" name="authMode" value="root_scope" checked /><span><b>Root Scope</b><small>Account email + All-Access Token.</small></span></label>
           <label class="query-mode"><input type="radio" name="authMode" value="user_scope" /><span><b>User Scope</b><small>User API Key for raw-data query and export.</small></span></label>
@@ -74,6 +74,17 @@
           </select>
           <div id="tenantStatus" class="status hidden"></div>
         </div>
+        <div class="saved-connection-actions">
+          <div>
+            <strong>Saved Stellar Cyber connection</strong>
+            <p class="hint">Host, credential, TLS setting and selected tenant are encrypted on the exporter server. Use Clear saved to remove them.</p>
+          </div>
+          <div class="row">
+            <button id="clearSavedConnection" class="button secondary" type="button" disabled>Clear saved</button>
+            <button id="saveConnection" class="button primary" type="button" disabled>Save connection</button>
+          </div>
+        </div>
+        <div id="savedConnectionStatus" class="status hidden"></div>
       </section>
 
       <section class="card">
@@ -480,7 +491,7 @@
             <span>Output</span>
             <span>Destination</span>
           </div>
-          <p class="summary-note final-note">Credentials stay in memory only; remote-job credentials are discarded after completion.</p>
+          <p class="summary-note final-note">Interactive credentials stay in memory unless you explicitly save the Stellar Cyber connection; saved connection credentials are encrypted at rest.</p>
           <div id="exportPreflight" class="export-preflight hidden" role="status" aria-live="polite"></div>
           <div id="runStatus" class="status hidden"></div>
           <div id="exportProgress" class="export-progress hidden">

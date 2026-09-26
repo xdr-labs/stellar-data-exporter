@@ -16,5 +16,9 @@ os.environ.setdefault(
     "STELLAR_EXPORTER_SCHEDULE_KEY_FILE",
     str(_TEST_STATE_DIR / "schedule.key"),
 )
+os.environ.setdefault(
+    "STELLAR_EXPORTER_CONNECTION_SETTINGS_FILE",
+    str(_TEST_STATE_DIR / "stellar-connection.enc"),
+)
 os.environ.setdefault("STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS", "3600")
 os.environ.setdefault("STELLAR_EXPORTER_UI_AUTH_DISABLED", "1")

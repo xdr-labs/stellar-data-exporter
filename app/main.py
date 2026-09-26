@@ -50,13 +50,14 @@ from .models import (
     IndexPlanInput,
     QueryInput,
     S3Destination,
+    SavedConnectionInput,
     ScheduleCreateInput,
     ScheduleUpdateInput,
     SFTPDestination,
 )
 from .index_planner import plan_indices
 from .job_store import JobStore
-from .paths import default_state_dir
+from .paths import default_state_dir, ensure_private_directory
 from .schedule_store import ScheduleCipher, ScheduleStore
 from .query import build_document_query, compile_user_query, hit_source, total_hits
 from .sources import resolve_indices, source_catalog, source_labels
@@ -87,6 +88,12 @@ SCHEDULE_KEY_PATH = Path(
         str(STATE_DIR / "schedule.key"),
     )
 )
+CONNECTION_SETTINGS_PATH = Path(
+    os.environ.get(
+        "STELLAR_EXPORTER_CONNECTION_SETTINGS_FILE",
+        str(STATE_DIR / "stellar-connection.enc"),
+    )
+)
 SCHEDULE_POLL_SECONDS = max(
     1.0,
     float(os.environ.get("STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS", "30")),
@@ -104,6 +111,42 @@ JOB_STORE.recover_interrupted()
 SCHEDULE_STORE = ScheduleStore(SCHEDULE_DB_PATH)
 SCHEDULE_CIPHER = ScheduleCipher.from_environment(SCHEDULE_KEY_PATH)
 LOGGER = logging.getLogger("stellar-data-exporter")
+
+
+def save_connection_settings(payload: SavedConnectionInput) -> None:
+    ensure_private_directory(CONNECTION_SETTINGS_PATH.parent)
+    ciphertext = SCHEDULE_CIPHER.encrypt(payload.model_dump_json().encode("utf-8"))
+    fd, temporary = tempfile.mkstemp(
+        prefix=".stellar-connection-",
+        dir=CONNECTION_SETTINGS_PATH.parent,
+    )
+    try:
+        os.write(fd, ciphertext)
+        os.fsync(fd)
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+    os.replace(temporary, CONNECTION_SETTINGS_PATH)
+    os.chmod(CONNECTION_SETTINGS_PATH, 0o600)
+
+
+def load_connection_settings() -> SavedConnectionInput | None:
+    if not CONNECTION_SETTINGS_PATH.exists():
+        return None
+    try:
+        plaintext = SCHEDULE_CIPHER.decrypt(CONNECTION_SETTINGS_PATH.read_bytes())
+        return SavedConnectionInput.model_validate_json(plaintext)
+    except Exception as exc:
+        raise RuntimeError(
+            "Saved Stellar Cyber connection cannot be decrypted or is invalid"
+        ) from exc
+
+
+def delete_connection_settings() -> bool:
+    if not CONNECTION_SETTINGS_PATH.exists():
+        return False
+    CONNECTION_SETTINGS_PATH.unlink()
+    return True
 
 
 @dataclass
@@ -1078,6 +1121,37 @@ async def test_connection(payload: ConnectionInput) -> dict[str, Any]:
         "tenant_count": len(tenants),
         "tenants": tenants,
     }
+
+
+@app.get("/api/settings/stellar-connection")
+async def get_saved_stellar_connection() -> dict[str, Any]:
+    try:
+        payload = load_connection_settings()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if payload is None:
+        return {"saved": False, "connection": None}
+    return {
+        "saved": True,
+        "connection": payload.model_dump(mode="json"),
+    }
+
+
+@app.put("/api/settings/stellar-connection")
+async def put_saved_stellar_connection(
+    payload: SavedConnectionInput,
+) -> dict[str, Any]:
+    save_connection_settings(payload)
+    return {
+        "saved": True,
+        "tenant_id": payload.tenant_id,
+        "tenant_name": payload.tenant_name,
+    }
+
+
+@app.delete("/api/settings/stellar-connection")
+async def clear_saved_stellar_connection() -> dict[str, Any]:
+    return {"deleted": delete_connection_settings()}
 
 
 @app.post("/api/destination/test")
