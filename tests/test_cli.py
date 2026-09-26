@@ -23,7 +23,7 @@ def test_cli_reports_package_version(capsys):
     assert capsys.readouterr().out.strip() == f"stellar-data-exporter {__version__}"
 
 
-def test_cli_defaults_to_loopback_and_safe_proxy_handling(monkeypatch):
+def test_cli_defaults_to_all_interfaces_and_safe_proxy_handling(monkeypatch):
     for name in (
         "STELLAR_EXPORTER_HOST",
         "STELLAR_EXPORTER_PORT",
@@ -36,7 +36,7 @@ def test_cli_defaults_to_loopback_and_safe_proxy_handling(monkeypatch):
 
     args = cli.build_parser().parse_args([])
 
-    assert args.host == "127.0.0.1"
+    assert args.host == "0.0.0.0"
     assert args.port == 8787
     assert args.proxy_headers is False
     assert args.forwarded_allow_ips == "127.0.0.1"
@@ -98,18 +98,25 @@ def test_cli_requires_tls_key_and_certificate_as_pair():
         cli.main(["--ssl-certfile", "/tmp/cert.pem"])
 
 
-def test_cli_enables_generated_https_by_default(monkeypatch):
+def test_cli_enables_generated_https_on_all_interfaces_by_default(monkeypatch):
     calls = []
+    generated_for = []
     generated = ("/tmp/generated-local.key", "/tmp/generated-local.crt")
-    monkeypatch.delenv("STELLAR_EXPORTER_TLS_DISABLED", raising=False)
-    monkeypatch.setattr(cli, "ensure_local_tls_certificate", lambda host: generated)
+    for name in ("STELLAR_EXPORTER_HOST", "STELLAR_EXPORTER_TLS_DISABLED"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "ensure_local_tls_certificate",
+        lambda host: generated_for.append(host) or generated,
+    )
     monkeypatch.setattr(cli.uvicorn, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
 
-    cli.main(["--host", "127.0.0.1", "--port", "9443"])
+    cli.main(["--port", "9443"])
 
+    assert generated_for == ["0.0.0.0"]
     assert calls[0][1]["ssl_keyfile"] == generated[0]
     assert calls[0][1]["ssl_certfile"] == generated[1]
-    assert calls[0][1]["host"] == "127.0.0.1"
+    assert calls[0][1]["host"] == "0.0.0.0"
     assert calls[0][1]["port"] == 9443
 
 
@@ -144,3 +151,25 @@ def test_cli_rejects_explicit_certificate_with_no_tls():
                 "/tmp/cert.pem",
             ]
         )
+
+
+def test_all_interface_certificate_sans_include_detected_host_ip(monkeypatch):
+    monkeypatch.setattr(cli.socket, "gethostname", lambda: "exporter-host")
+    monkeypatch.setattr(cli.socket, "getfqdn", lambda: "exporter-host.local")
+    monkeypatch.setattr(
+        cli.socket,
+        "getaddrinfo",
+        lambda hostname, port: [
+            (None, None, None, None, ("192.168.50.10", 0)),
+        ],
+    )
+
+    names = cli._certificate_alt_names("0.0.0.0")
+    addresses = {
+        str(item.value)
+        for item in names
+        if isinstance(item, x509.IPAddress)
+    }
+
+    assert "127.0.0.1" in addresses
+    assert "192.168.50.10" in addresses

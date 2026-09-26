@@ -160,8 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--host",
-        default=os.environ.get("STELLAR_EXPORTER_HOST", "127.0.0.1"),
-        help="Listen address (default: 127.0.0.1).",
+        default=os.environ.get("STELLAR_EXPORTER_HOST", "0.0.0.0"),
+        help="Listen address (default: 0.0.0.0; all IPv4 interfaces).",
     )
     parser.add_argument(
         "--port",

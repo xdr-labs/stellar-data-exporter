@@ -95,19 +95,21 @@ uv sync --frozen
 uv run stellar-data-exporter
 ```
 
-The packaged launcher binds to `127.0.0.1:8787` and enables HTTPS by default. On first run it creates a persistent self-signed local certificate under the exporter state directory and reuses it on later runs.
+The packaged launcher binds to `0.0.0.0:8787` and enables HTTPS by default. That means it listens on every IPv4 interface, so the same installation can be reached from the local machine or another computer on the network. On first run it creates a persistent self-signed local certificate under the exporter state directory and reuses it on later runs.
 
-Open:
-
-```text
-https://127.0.0.1:8787
-```
-
-or:
+On the exporter host, open:
 
 ```text
 https://localhost:8787
 ```
+
+From another computer, open:
+
+```text
+https://<exporter-host-ip>:8787
+```
+
+For example, if the exporter host is `192.168.1.50`, open `https://192.168.1.50:8787`.
 
 The application requires HTTP Basic Auth on the UI and API. The default login is
 `stellar` / `stellar`. Override it with `STELLAR_EXPORTER_UI_USERNAME` and
@@ -115,19 +117,13 @@ The application requires HTTP Basic Auth on the UI and API. The default login is
 
 Because the automatically generated local certificate is self-signed, a browser can show a certificate warning the first time. The connection is still HTTPS encrypted. For a trusted browser certificate, supply your own certificate with `--ssl-keyfile` and `--ssl-certfile`.
 
-Check the service:
+Check the service from the exporter host:
 
 ```bash
-curl -k https://127.0.0.1:8787/api/health
+curl -k https://localhost:8787/api/health
 ```
 
-To access a local install from another computer, bind to the server interfaces:
-
-```bash
-uv run stellar-data-exporter --host 0.0.0.0
-```
-
-Then open `https://<server-ip>:8787`. The generated certificate includes localhost, the server hostname, and detected local IP addresses.
+No extra bind option is needed for remote access: `0.0.0.0:8787` is the default. The generated certificate includes localhost, the server hostname, and detected local IP addresses. Make sure the host firewall allows inbound TCP/8787 only from the networks that should use the exporter.
 
 Use `--no-tls` only when the exporter is bound to loopback behind a TLS-terminating reverse proxy such as Nginx.
 
