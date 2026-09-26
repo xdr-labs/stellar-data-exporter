@@ -204,10 +204,23 @@
             </div>
             <span class="managed-badge system">Read only</span>
           </div>
+          <div class="inspector-copy-help">
+            <strong>Copy tools</strong>
+            <p>Use these when you want to inspect or reproduce the exact request outside this UI. Credentials are not copied.</p>
+          </div>
           <div class="inspector-actions">
-            <button id="copyDsl" class="button secondary small" type="button">Copy DSL</button>
-            <button id="copyRequestPath" class="button secondary small" type="button">Copy request path</button>
-            <button id="copyCurl" class="button secondary small" type="button">Copy cURL</button>
+            <div class="inspector-copy-tool">
+              <button id="copyDsl" class="button secondary small" type="button">Copy DSL</button>
+              <p>Copies the final query JSON after the exporter adds managed tenant and time filters. Useful for reviewing the exact query logic.</p>
+            </div>
+            <div class="inspector-copy-tool">
+              <button id="copyRequestPath" class="button secondary small" type="button">Copy request path</button>
+              <p>Copies only the Stellar Cyber API path and resolved index pattern. Useful when building scripts or checking API endpoints.</p>
+            </div>
+            <div class="inspector-copy-tool">
+              <button id="copyCurl" class="button secondary small" type="button">Copy cURL</button>
+              <p>Copies a terminal-ready cURL example so you can reproduce the request outside the UI. Tokens and credentials stay redacted.</p>
+            </div>
             <span id="copyStatus" class="copy-status"></span>
           </div>
           <div class="inspector-section">
