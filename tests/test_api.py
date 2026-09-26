@@ -568,3 +568,37 @@ def test_sftp_host_key_lookup_endpoint(monkeypatch):
         "fingerprint": "SHA256:test-fingerprint",
         "public_key": "ssh-ed25519 AAAATEST",
     }
+
+
+def test_browser_download_is_only_available_after_complete_and_has_content_length(monkeypatch):
+    async def slow_search(self, index, body):
+        await asyncio.sleep(0.1)
+        return await fake_search(self, index, body)
+
+    monkeypatch.setattr(StellarClient, "search", slow_search)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/export/jobs",
+            json={
+                **payload(),
+                "format": "csv",
+                "compress": False,
+                "filename": "ready-only",
+            },
+        )
+        assert created.status_code == 200
+        body = created.json()
+
+        early = client.get(body["download_url"])
+        assert early.status_code == 409
+        assert "still being prepared" in early.text
+
+        status = wait_for_terminal_job(client, body["status_url"])
+        assert status["status"] == "completed"
+        assert status["bytes_sent"] > 0
+
+        downloaded = client.get(body["download_url"])
+        assert downloaded.status_code == 200
+        assert int(downloaded.headers["content-length"]) == len(downloaded.content)
+        assert len(downloaded.content) > 0
+        assert downloaded.headers["content-disposition"] == 'attachment; filename="ready-only.csv"'
