@@ -153,3 +153,39 @@ def test_sftp_pinned_host_key_is_used_for_connection():
     assert kwargs["host"] == "sftp.example.test"
     assert kwargs["password"] == "secret"
     assert kwargs["known_hosts"] is not None
+
+
+def test_sftp_pinned_host_key_builds_known_hosts_verifier():
+    public_key = (
+        "ssh-ed25519 "
+        "AAAAC3NzaC1lZDI1NTE5AAAAICL8fIuM1nXvHkG5Jv6AAoSk2gYQ0jL8d1E2n3T4u5V6"
+    )
+    entry = sftp_known_hosts_entry("sftp.example.test", 2222, public_key)
+    assert entry.startswith("[sftp.example.test]:2222 ssh-ed25519 ")
+
+    destination = SFTPDestination(
+        host="sftp.example.test",
+        port=2222,
+        username="exporter",
+        auth_method="password",
+        password="test-password",
+        remote_path="/exports",
+        verify_host_key=True,
+        server_host_key=public_key,
+    )
+    kwargs = _sftp_connect_kwargs(destination)
+    assert kwargs["host"] == "sftp.example.test"
+    assert kwargs["port"] == 2222
+    assert kwargs["known_hosts"] is not None
+
+
+def test_sftp_without_host_key_verification_explicitly_disables_known_hosts():
+    destination = SFTPDestination(
+        host="sftp.example.test",
+        username="exporter",
+        auth_method="password",
+        password="test-password",
+        remote_path="/exports",
+        verify_host_key=False,
+    )
+    assert _sftp_connect_kwargs(destination)["known_hosts"] is None

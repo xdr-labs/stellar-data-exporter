@@ -89,6 +89,8 @@ SCHEDULE_KEY_PATH = Path(
         str(STATE_DIR / "schedule.key"),
     )
 )
+DEPRECATED_CONNECTION_SETTINGS_PATH = STATE_DIR / "stellar-connection.enc"
+
 SCHEDULE_POLL_SECONDS = max(
     1.0,
     float(os.environ.get("STELLAR_EXPORTER_SCHEDULE_POLL_SECONDS", "30")),
@@ -140,8 +142,20 @@ EXPORT_JOBS: dict[str, ExportJob] = {}
 ACTIVE_SCHEDULE_RUNS: dict[str, asyncio.Task] = {}
 
 
+def remove_deprecated_shared_connection_file() -> None:
+    try:
+        DEPRECATED_CONNECTION_SETTINGS_PATH.unlink(missing_ok=True)
+    except OSError as exc:
+        LOGGER.warning(
+            "Could not remove deprecated shared Stellar connection file %s: %s",
+            DEPRECATED_CONNECTION_SETTINGS_PATH,
+            exc,
+        )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    remove_deprecated_shared_connection_file()
     loop_task = asyncio.create_task(schedule_loop())
     try:
         yield
@@ -156,6 +170,10 @@ async def lifespan(_: FastAPI):
             task.cancel()
         if active:
             await asyncio.gather(*active, return_exceptions=True)
+        for job in EXPORT_JOBS.values():
+            if job.download_path:
+                cleanup_paths([job.download_path])
+                job.download_path = None
 
 
 app = FastAPI(title="Stellar Data Exporter", version=__version__, lifespan=lifespan)
