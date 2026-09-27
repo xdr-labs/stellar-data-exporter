@@ -2132,7 +2132,9 @@ async function runExport() {
       body: JSON.stringify(basePayload()),
     });
     const matchedTotal = Number(countResult.total || 0);
+    state.previewTotal = matchedTotal;
     renderExportPreflight(countResult, payload);
+    updateSummary();
 
     if (matchedTotal === 0) {
       setStatus(
@@ -2149,7 +2151,7 @@ async function runExport() {
       if (!proceed) {
         setStatus(
           "runStatus",
-          `Export not started. ${state.previewTotal.toLocaleString()} records matched. Refine the tenant, time range, query or data sources and try again.`,
+          `Export not started. ${matchedTotal.toLocaleString()} records matched. Refine the tenant, time range, query or data sources and try again.`,
           "warning",
         );
         return;
@@ -2157,7 +2159,7 @@ async function runExport() {
     }
 
     button.textContent = "Running export…";
-    setStatus("runStatus", `Count check complete: ${state.previewTotal.toLocaleString()} records. Creating export job…`);
+    setStatus("runStatus", `Count check complete: ${matchedTotal.toLocaleString()} records. Creating export job…`);
     const result = await api("/api/export/jobs", {
       method: "POST",
       body: JSON.stringify(payload),
