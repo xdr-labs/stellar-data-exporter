@@ -1462,14 +1462,31 @@ function saveConnectionSettings() {
 function clearSavedConnection() {
   const button = $("clearSavedConnection");
   try {
-    setBusy(button, true, "Clearing…");
+    setBusy(button, true, "Forgetting…");
     sessionStorage.removeItem(CONNECTION_SESSION_STORAGE_KEY);
     state.savedTenantId = "";
     state.savedTenantName = "";
     state.savedConnectionExists = false;
+
+    $("host").value = "";
+    $("email").value = "";
+    $("token").value = "";
+    $("verifyTls").checked = true;
+
+    const connectionStatus = $("connectionStatus");
+    if (connectionStatus) {
+      connectionStatus.className = "status hidden";
+      connectionStatus.textContent = "";
+    }
+
+    invalidateTenantSelection("Test connection to load tenants");
+    updateAuthModeUI();
+    updateSummary();
+    renderEffectiveRequest();
+
     setStatus(
       "savedConnectionStatus",
-      "Browser-session connection memory cleared. Current form values are unchanged.",
+      "Session forgotten. Host, credential, tenant, and connection results were cleared from this page.",
       "success",
     );
   } catch (error) {
