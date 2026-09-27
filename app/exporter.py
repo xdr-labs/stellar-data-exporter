@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .query import build_document_query, hit_identity, hit_source, total_hits
-from .stellar import StellarClient
+from .stellar import StellarClient, StellarReadTimeoutError
 
 
 class DenseSliceError(RuntimeError):
@@ -109,6 +109,7 @@ class ExportEngine:
         on_slice: Callable[[datetime, datetime], None] | None = None,
         on_record: Callable[[], None] | None = None,
         on_duplicate: Callable[[], None] | None = None,
+        on_adaptive_split: Callable[[], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ):
         self.client = client
@@ -124,6 +125,7 @@ class ExportEngine:
         self.on_slice = on_slice
         self.on_record = on_record
         self.on_duplicate = on_duplicate
+        self.on_adaptive_split = on_adaptive_split
         self.cancel_check = cancel_check
 
     def _check_cancelled(self) -> None:
@@ -195,17 +197,32 @@ class ExportEngine:
                         f"{count} records remain inside the minimum "
                         f"{self.minimum_slice.total_seconds() * 1000:.0f} ms slice"
                     )
+                if self.on_adaptive_split:
+                    self.on_adaptive_split()
                 midpoint = start + duration / 2
                 stack.append((midpoint, end))
                 stack.append((start, midpoint))
                 continue
 
-            records, actual_count = await self._fetch(start, end)
+            try:
+                records, actual_count = await self._fetch(start, end)
+            except StellarReadTimeoutError:
+                if duration <= self.minimum_slice:
+                    raise
+                if self.on_adaptive_split:
+                    self.on_adaptive_split()
+                midpoint = start + duration / 2
+                stack.append((midpoint, end))
+                stack.append((start, midpoint))
+                continue
+
             if actual_count > self.target_records:
                 if duration <= self.minimum_slice:
                     raise DenseSliceError(
                         f"{actual_count} records arrived inside the minimum slice"
                     )
+                if self.on_adaptive_split:
+                    self.on_adaptive_split()
                 midpoint = start + duration / 2
                 stack.append((midpoint, end))
                 stack.append((start, midpoint))

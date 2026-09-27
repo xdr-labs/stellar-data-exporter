@@ -315,7 +315,7 @@ function resetAdvancedDefaults() {
   $("maxFileSizeUnit").value = "mb";
   $("s3PathStyle").checked = false;
   $("sftpVerifyHostKey").checked = true;
-  $("targetRecords").value = "5000";
+  $("targetRecords").value = "250";
   $("minimumSlice").value = "1";
   $("overlapPolicy").value = "allow";
   $("resolvedIndices").classList.add("hidden");
@@ -616,8 +616,8 @@ function renderInspector(plan, target) {
   }
   $("inspectorExportLimit").textContent = limitText;
 
-  const targetRecords = Number($("targetRecords").value || 5000);
-  $("inspectorAdaptiveSlicing").textContent = "Enabled · time-range bisect";
+  const targetRecords = Number($("targetRecords").value || 250);
+  $("inspectorAdaptiveSlicing").textContent = "Enabled · count + slow-response bisect";
   $("inspectorTargetRecords").textContent = Number.isFinite(targetRecords)
     ? targetRecords.toLocaleString()
     : "—";
@@ -730,7 +730,7 @@ function basePayload() {
     end,
     ...queryPayloadFields(),
     preview_limit: 100,
-    target_records_per_slice: Number($("targetRecords").value || 5000),
+    target_records_per_slice: Number($("targetRecords").value || 250),
     minimum_slice_ms: Number($("minimumSlice").value || 1),
   };
 }
@@ -949,7 +949,7 @@ function exportProfileSnapshot() {
     csv_bom: $("csvBom").checked,
     csv_flatten_nested: $("csvFlatten").checked,
     destination: nonSecretDestinationProfile(),
-    target_records_per_slice: Number($("targetRecords").value || 5000),
+    target_records_per_slice: Number($("targetRecords").value || 250),
     minimum_slice_ms: Number($("minimumSlice").value || 1),
     overlap_policy: $("overlapPolicy").value || "allow",
   };
@@ -1055,7 +1055,7 @@ function applyProfileSettings(settings) {
     );
   }
 
-  $("targetRecords").value = String(settings.target_records_per_slice || 5000);
+  $("targetRecords").value = String(settings.target_records_per_slice || 250);
   $("minimumSlice").value = String(settings.minimum_slice_ms || 1);
   $("overlapPolicy").value = settings.overlap_policy || "allow";
 
@@ -1759,13 +1759,14 @@ function renderExportProgress(status) {
   $("progressFiles").textContent = Number(status.files_completed || 0).toLocaleString();
   $("progressQueries").textContent = Number(status.query_count || 0).toLocaleString();
   $("progressRetries").textContent = Number(status.retry_count || 0).toLocaleString();
+  $("progressAdaptiveSplits").textContent = Number(status.adaptive_split_count || 0).toLocaleString();
   $("progressDuplicates").textContent = Number(status.duplicates_skipped || 0).toLocaleString();
   $("progressElapsed").textContent = humanDuration(status.elapsed_seconds);
   const rate = Number(status.rate_records_per_second || 0);
   $("progressRate").textContent = `${rate.toFixed(rate >= 10 ? 1 : 2)} rec/s`;
   $("progressRange").textContent =
     status.current_slice_start && status.current_slice_end
-      ? `${status.current_slice_start} → ${status.current_slice_end}`
+      ? formatHistoryRange({start: status.current_slice_start, end: status.current_slice_end})
       : "Waiting to start";
 
   const terminal = ["completed", "failed", "cancelled"].includes(status.status);
@@ -1813,9 +1814,13 @@ async function pollExport(statusUrl) {
       throw new Error(status.error || "Export failed.");
     }
     const verb = status.cancel_requested ? "Cancelling" : status.status === "pending" ? "Preparing" : "Exporting";
+    const adaptiveSplits = Number(status.adaptive_split_count || 0);
+    const adaptiveNote = adaptiveSplits > 0
+      ? ` · ${adaptiveSplits.toLocaleString()} adaptive split${adaptiveSplits === 1 ? "" : "s"}`
+      : "";
     setStatus(
       "runStatus",
-      `${verb}… ${Number(status.records_exported || 0).toLocaleString()} records · ${humanBytes(status.bytes_sent)} transferred.`,
+      `${verb}… ${Number(status.records_exported || 0).toLocaleString()} records · ${humanBytes(status.bytes_sent)} transferred${adaptiveNote}.`,
     );
     await wait(500);
   }

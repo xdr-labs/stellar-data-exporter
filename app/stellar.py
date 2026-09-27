@@ -33,6 +33,10 @@ class StellarConnectionError(StellarAPIError):
     pass
 
 
+class StellarReadTimeoutError(StellarConnectionError):
+    """A document fetch timed out and may succeed with a smaller time slice."""
+
+
 def transport_failure_summary(exc: BaseException | None, *, operation: str) -> str:
     current = exc
     seen: set[int] = set()
@@ -377,6 +381,14 @@ class StellarClient:
                         )
                 except (httpx.RequestError, StellarConnectionError) as exc:
                     last_connection_error = exc
+                    if (
+                        isinstance(exc, httpx.ReadTimeout)
+                        and int(body.get("size") or 0) > 0
+                    ):
+                        raise StellarReadTimeoutError(
+                            "Stellar Cyber did not return the document response before the read timeout. "
+                            "The Exporter will retry this range using smaller adaptive time slices."
+                        ) from exc
                     if attempt + 1 >= QUERY_RETRY_ATTEMPTS:
                         raise StellarConnectionError(
                             "Connection to Stellar Cyber remained unavailable after automatic retries. "
