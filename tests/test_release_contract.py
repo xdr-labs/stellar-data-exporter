@@ -108,7 +108,7 @@ def test_forget_session_clears_browser_memory_and_visible_connection_values():
     assert "Current form values are unchanged." not in javascript
 
     assert ">Forget session</button>" in html
-    assert "clears Host, credential, tenant, and connection results from this page" in html
+    assert "Forget session immediately clears them from this page" in html
 
 
 def test_export_without_preview_uses_count_preflight_result():
@@ -135,3 +135,30 @@ def test_adaptive_export_defaults_and_progress_are_visible():
     assert "Enabled · count + slow-response bisect" in javascript
     assert 'id="progressAdaptiveSplits">0</strong>' in html
     assert 'status.adaptive_split_count || 0' in javascript
+
+
+def test_remembered_session_revalidates_and_restores_saved_tenant_automatically():
+    javascript = read("app/static/app.js")
+    html = read("app/static/index.html")
+
+    restore_start = javascript.index("async function restoreSavedConnectionTenant()")
+    restore_end = javascript.index("function loadSavedConnection()", restore_start)
+    restore_block = javascript[restore_start:restore_end]
+
+    assert 'const expectedTenantId = state.savedTenantId;' in restore_block
+    assert 'const result = await api("/api/connection/test"' in restore_block
+    assert "retryTransient: true" in restore_block
+    assert "renderTenants(result.tenants || []);" in restore_block
+    assert "selectedTenantId() === expectedTenantId" in restore_block
+    assert "restored automatically" in restore_block
+
+    load_start = javascript.index("function loadSavedConnection()")
+    load_end = javascript.index("function updateSummary()", load_start)
+    load_block = javascript[load_start:load_end]
+    assert "state.savedTenantId = saved.tenant_id ||" in load_block
+    assert "state.savedTenantName = saved.tenant_name ||" in load_block
+    assert "void restoreSavedConnectionTenant();" in load_block
+    assert "Test connection to restore tenant" not in load_block
+
+    assert "selected tenant only in the current browser session" in html
+    assert "tenant is revalidated and restored automatically" in html

@@ -1497,6 +1497,72 @@ function clearSavedConnection() {
   }
 }
 
+async function restoreSavedConnectionTenant() {
+  const expectedTenantId = state.savedTenantId;
+  const expectedTenantName = state.savedTenantName;
+  if (!state.savedConnectionExists || !expectedTenantId) return;
+
+  try {
+    invalidateTenantSelection(
+      expectedTenantName
+        ? `Restoring session tenant: ${expectedTenantName}…`
+        : "Restoring saved session tenant…",
+    );
+    setStatus(
+      "savedConnectionStatus",
+      expectedTenantName
+        ? `Restoring remembered tenant ${expectedTenantName}…`
+        : "Restoring remembered tenant…",
+    );
+
+    const authMode = selectedAuthMode();
+    const sources = selectedSources();
+    const connectionSources = sources.length ? sources : ["alerts"];
+    const result = await api("/api/connection/test", {
+      method: "POST",
+      retryTransient: true,
+      body: JSON.stringify({
+        host: $("host").value.trim(),
+        auth_mode: authMode,
+        email: authMode === "root_scope" ? $("email").value.trim() : null,
+        token: $("token").value.trim(),
+        verify_tls: $("verifyTls").checked,
+        sources: connectionSources,
+      }),
+    });
+
+    renderTenants(result.tenants || []);
+    if (selectedTenantId() === expectedTenantId) {
+      setStatus(
+        "connectionStatus",
+        `Session connection restored. Tenant ${selectedTenantName() || expectedTenantName || expectedTenantId} is ready.`,
+        "success",
+      );
+      setStatus(
+        "savedConnectionStatus",
+        `Browser-session connection and tenant ${selectedTenantName() || expectedTenantName || expectedTenantId} restored automatically.`,
+        "success",
+      );
+    }
+  } catch (error) {
+    invalidateTenantSelection(
+      expectedTenantName
+        ? `Could not restore ${expectedTenantName} — Test connection to retry`
+        : "Automatic tenant restore failed — Test connection to retry",
+    );
+    setStatus("connectionStatus", error.message, "error");
+    setStatus(
+      "savedConnectionStatus",
+      "Browser-session Host and credential were restored, but the tenant could not be verified automatically. Press Test connection to retry.",
+      "warning",
+    );
+    state.savedTenantId = expectedTenantId;
+    state.savedTenantName = expectedTenantName;
+    state.savedConnectionExists = true;
+    updateSaveConnectionAvailability();
+  }
+}
+
 function loadSavedConnection() {
   try {
     const raw = sessionStorage.getItem(CONNECTION_SESSION_STORAGE_KEY);
@@ -1529,19 +1595,22 @@ function loadSavedConnection() {
     updateAuthModeUI();
     invalidateTenantSelection(
       state.savedTenantName
-        ? `Session tenant: ${state.savedTenantName} — test connection to restore`
+        ? `Restoring session tenant: ${state.savedTenantName}…`
         : "Test connection to load tenants",
     );
     setStatus(
       "savedConnectionStatus",
       state.savedTenantName
-        ? `Browser-session connection restored. Test connection to restore tenant ${state.savedTenantName}.`
-        : "Browser-session connection restored. Test connection to restore its tenant.",
+        ? `Browser-session connection restored. Restoring tenant ${state.savedTenantName} automatically…`
+        : "Browser-session connection restored. Test connection to select a tenant, then remember the session again.",
       "success",
     );
     state.savedConnectionExists = true;
     updateSaveConnectionAvailability();
     updateSummary();
+    if (state.savedTenantId) {
+      void restoreSavedConnectionTenant();
+    }
   } catch {
     sessionStorage.removeItem(CONNECTION_SESSION_STORAGE_KEY);
     state.savedConnectionExists = false;
