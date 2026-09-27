@@ -36,7 +36,7 @@ Stellar Data Exporter provides a Web UI for searching Stellar Cyber raw data acr
 | **Preview** | Validate the query and inspect matching records before exporting |
 | **Export formats** | CSV, JSON Array, or NDJSON |
 | **Destinations** | Browser download, S3-compatible object storage, or SFTP |
-| **Large exports** | Adaptive time slicing, record limits, gzip, file splitting, progress, cancellation, and retry/resume |
+| **Large exports** | Count preflight, locked run configuration, adaptive time slicing, current/total progress, cancellation, and retry/resume |
 | **Operator workflow** | Browser-session connection memory, saved non-secret profiles, query history/favorites, export history, and scheduled remote exports |
 
 ## Workflow
@@ -62,8 +62,9 @@ flowchart LR
 5. Enter an Elasticsearch DSL or Stellar Cyber query.
 6. Run **Preview** and confirm the matching records.
 7. Choose CSV, JSON, or NDJSON and the destination.
-8. Click **Run export**. The exporter performs a count-only preflight before creating the export job.
-9. If the matched count is large, review the performance warning and explicitly confirm before the export starts.
+8. Click **Run export**. The exporter immediately locks every export-affecting setting and performs a count-only preflight before creating the export job. For long ranges, the UI shows the elapsed preflight time.
+9. If the matched count is large, review the performance warning and explicitly confirm before the export starts. Choosing **Go back and refine** unlocks the settings without creating a job.
+10. While the job runs, the Export Summary stays frozen to the job snapshot and progress shows current/expected records plus percentage. The same browser session reconnects to an active job after refresh and keeps the settings locked until the job completes, fails, or is cancelled.
 
 For the full operator walkthrough, see the **[Stellar Data Exporter User Guide](https://xdr.ooo/products/stellar-data-exporter-guide)**.
 
@@ -171,14 +172,16 @@ Advanced mode exposes tuning controls such as field selection, delimiter/header 
 
 The exporter uses half-open time ranges and adaptive slicing to avoid sending one oversized raw-data request for a large time window.
 
-Before any interactive export job is created, the exporter runs a count-only preflight scoped to the selected tenant, data sources, time range, and query. Large matches require explicit confirmation before the export begins. The default warning threshold is 100,000 records and the critical threshold is 1,000,000 records; both are configurable with environment variables.
+Before any interactive export job is created, the exporter locks the export configuration and runs a count-only preflight scoped to the selected tenant, data sources, time range, and query. The preflight UI shows elapsed time for long ranges. Large matches require explicit confirmation before the export begins. The default warning threshold is 100,000 records and the critical threshold is 1,000,000 records; both are configurable with environment variables. If the user cancels the preflight confirmation or the count is zero, the form is unlocked without creating a job.
+
+Once a job is created, the selected configuration is treated as an immutable job snapshot. The Export Summary no longer follows later form state, current progress is shown as `exported / expected` plus percentage, and the matched total is persisted as sanitized job metadata. In the same browser session, refreshing the page reconnects to the active job and keeps its configuration locked until a terminal state is reached.
 
 It can also:
 
-- run interactive export work in a detached worker process so restarting the Web/API process does not abort an in-progress export
-- keep completed browser-download artifacts on disk for the history TTL so they remain downloadable after an API restart
+- run interactive export work in a detached worker process so an ordinary Web/API process loss can be recovered without coupling export execution to the request handler; **do not treat this as permission to `systemctl stop/restart` the service while jobs are active**, because production service managers can terminate the entire service cgroup including worker processes
+- keep completed browser-download artifacts on disk for the history TTL so they remain downloadable after an API restart; while the file is still being staged, the UI shows **Preparing…** instead of a misleading `0 B` transfer
 - automatically retry transient Stellar Cyber connection resets, timeouts, HTTP 429, and HTTP 5xx responses with exponential backoff
-- show live records/bytes/query/retry progress from SQLite-backed worker state
+- show live current/expected records, percentage, bytes, files, partitions, query/retry counts, and adaptive-split progress from SQLite-backed worker state
 - cancel active detached or inline exports
 - preserve sanitized job history
 - resume supported remote exports from verified split-part checkpoints
@@ -190,7 +193,7 @@ It can also:
 - The UI and API require HTTP Basic Auth by default; only `/api/health` is unauthenticated.
 - The development login defaults to `stellar` / `stellar`; override it with `STELLAR_EXPORTER_UI_USERNAME` and `STELLAR_EXPORTER_UI_PASSWORD` before production exposure.
 - Stellar Cyber credentials are used only after the user selects exactly one accessible tenant; Preview, count, export, resume, and schedules remain tenant-scoped.
-- Interactive Stellar Cyber credentials are never stored as a shared server-side connection. **Remember this session** stores Host/Auth/Credential/TLS/Tenant only in the current browser tab's session storage; it survives refresh but is not shared with other browsers/devices and disappears when that browser session ends.
+- Interactive Stellar Cyber credentials are never stored as a shared server-side connection. **Remember this session** stores Host/Auth/Credential/TLS/Tenant only in browser `sessionStorage`; it survives refresh in that browser session, is not stored on the Exporter server, is not shared with other browsers/devices, and disappears when that browser session ends.
 - **Forget session** removes the browser-session copy and clears the visible Host, credential, tenant, and connection results from the page.
 - Interactive export credentials are handed to the detached worker through a one-shot stdin pipe. They are not stored in SQLite job history and are not placed on the worker command line.
 - Credentials are excluded from browser-saved export profiles and persistent job history.

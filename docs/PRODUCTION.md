@@ -163,18 +163,31 @@ Then verify in the browser:
 3. Connection Test succeeds against the intended Stellar Cyber instance and loads accessible tenants.
 4. Select exactly one tenant and confirm the summary shows that tenant.
 5. Preview succeeds for a narrow range and returned records belong to the selected tenant.
-6. Click Run export and confirm the count preflight appears before the export job starts.
-7. A small browser export succeeds; the downloaded file is non-empty and its size matches the completed job bytes/HTTP Content-Length.
-8. **Remember this session** survives refresh in the same browser session, while a separate browser session starts without the Stellar credential.
-9. For a new SFTP target, use **Get host key**, verify the SHA256 fingerprint out-of-band, click **Trust this host key**, and then run **Test destination**.
-10. A small S3/SFTP remote export succeeds.
-11. Export History survives a service restart.
-12. If schedules are enabled, create one paused schedule, Run now once, verify the remote object,
-    restart the service, verify schedule state, then delete the test schedule.
+6. Click **Run export** and confirm all export-affecting controls immediately become disabled/`LOCKED` while the count preflight runs. Confirm the preflight displays elapsed time for a long-running count.
+7. After the job starts, confirm the Export Summary stays fixed to the job snapshot and Records shows `current / expected` plus a percentage. Refresh the page in the same browser session and confirm the active job reconnects with its settings still locked.
+8. A small browser export succeeds; while staging, Transferred may show **Preparing…**. After completion, the downloaded file is non-empty and its size matches the completed job bytes/HTTP Content-Length.
+9. **Remember this session** survives refresh in the same browser session, while a separate browser session starts without the Stellar credential. **Forget session** removes the temporary browser copy.
+10. For a new SFTP target, use **Get host key**, verify the SHA256 fingerprint out-of-band, click **Trust this host key**, and then run **Test destination**.
+11. A small S3/SFTP remote export succeeds and its Records progress uses the same current/expected semantics as browser download.
+12. Export History survives a service restart performed only after all interactive jobs have reached a terminal state.
+13. If schedules are enabled, create one paused schedule, Run now once, verify the remote object,
+    wait for that run to finish, restart the service, verify schedule state, then delete the test schedule.
 
 ## 8. Upgrade
 
-Before changing code:
+Before changing code, first make sure there are no interactive exports in `pending` or `running` state. Detached workers survive loss of the Web/API request handler, but the default systemd `KillMode=control-group` behavior can terminate worker processes during `systemctl stop/restart`. Wait for active jobs to finish or cancel them before stopping the service.
+
+Check the persistent job database without exposing credentials or raw queries:
+
+```bash
+sudo -u stellar-exporter python3 - <<'PY'
+import sqlite3
+con = sqlite3.connect('/var/lib/stellar-data-exporter/export-jobs.sqlite3')
+print(con.execute("select count(*) from export_jobs where status in ('pending','running')").fetchone()[0])
+PY
+```
+
+Proceed only when the result is `0`:
 
 ```bash
 sudo systemctl stop stellar-data-exporter
@@ -212,7 +225,7 @@ sudo systemctl start stellar-data-exporter
 
 The restore test rejects unsafe archive paths and runs SQLite `PRAGMA integrity_check` against
 the job and schedule databases when present. A restore must include the same `schedule.key`
-(or the same externally managed Fernet key) used to encrypt both scheduled exports and any saved Stellar Cyber connection.
+(or the same externally managed Fernet key) used to encrypt scheduled export configurations. Interactive Stellar Cyber connection credentials are browser-session-only and are not part of the server backup.
 
 ## 10. Incident checks
 
