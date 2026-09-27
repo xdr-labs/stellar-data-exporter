@@ -121,7 +121,8 @@ def test_export_without_preview_uses_count_preflight_result():
     assert "const matchedTotal = Number(countResult.total || 0);" in run_block
     assert "state.previewTotal = matchedTotal;" in run_block
     assert "updateSummary();" in run_block
-    assert "${matchedTotal.toLocaleString()} records. Creating export job" in run_block
+    assert "${matchedTotal.toLocaleString()} records. Creating locked export job" in run_block
+    assert "payload.matched_total = matchedTotal;" in run_block
     assert "${state.previewTotal.toLocaleString()} records. Creating export job" not in run_block
 
 
@@ -167,3 +168,45 @@ def test_remembered_session_revalidates_and_restores_saved_tenant_automatically(
 
     assert "selected tenant only in the current browser session" in html
     assert "tenant is revalidated and restored automatically" in html
+    assert "Browser-session connection" in html
+    assert "Interactive connection credentials are never stored on the Exporter server" in html
+    assert "Encrypted saved connection" not in html
+
+
+def test_browser_locks_export_configuration_for_active_export():
+    javascript = read("app/static/app.js")
+    stylesheet = read("app/static/styles.css")
+
+    assert 'const EXPORT_CONFIGURATION_SCOPE = ".content > .card:not(.final-action-card):not(.export-history-card)";' in javascript
+    assert "function setExportConfigurationLocked(locked)" in javascript
+    assert 'card.querySelectorAll("input, select, textarea, button")' in javascript
+    assert 'setControlExportLocked($("basicMode"), locked)' not in javascript
+    assert '[$("basicMode"), $("advancedMode")]' in javascript
+
+    run_start = javascript.index("async function runExport()")
+    run_end = javascript.index("function defaultSourceId", run_start)
+    run_block = javascript[run_start:run_end]
+    assert "const payload = exportPayload();" in run_block
+    assert "const countPayload = basePayload();" in run_block
+    assert "setExportConfigurationLocked(true);" in run_block
+    assert "body: JSON.stringify(countPayload)" in run_block
+    assert "else if (!jobStarted && configurationLocked)" in run_block
+    assert "finishActiveExport();" in run_block
+    assert "activateExport({" in run_block
+
+    resume_start = javascript.index("async function resumeExport(")
+    resume_end = javascript.index("function renderExportPreflight", resume_start)
+    resume_block = javascript[resume_start:resume_end]
+    assert "setExportConfigurationLocked(true);" in resume_block
+    assert "else if (!jobStarted && configurationLocked)" in resume_block
+    assert "finishActiveExport();" in resume_block
+
+    assert ".configuration-locked::after" in stylesheet
+    assert 'content:"LOCKED"' in stylesheet
+    assert "ACTIVE_EXPORT_SESSION_STORAGE_KEY" in javascript
+    assert "async function restoreActiveExportSession()" in javascript
+    assert "void restoreActiveExportSession();" in javascript
+    assert "function exportProgressValues(status)" in javascript
+    assert 'id="exportProgressMeter"' in read("app/static/index.html")
+    assert "function startCountPreflightTimer(button)" in javascript
+    assert "Large ranges can take several minutes" in javascript

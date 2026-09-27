@@ -435,6 +435,36 @@ def test_persistent_export_history_survives_memory_reset_without_secrets(monkeyp
     assert b"query-secret-must-not-persist" not in database_bytes
 
 
+def test_export_status_persists_preflight_total_for_progress(monkeypatch, tmp_path):
+    monkeypatch.setattr(StellarClient, "search", fake_search)
+    monkeypatch.setattr(main_app, "JOB_STORE", JobStore(tmp_path / "progress.sqlite3"))
+    main_app.EXPORT_JOBS.clear()
+    client = TestClient(app)
+
+    request = {
+        **payload(),
+        "matched_total": 125,
+        "tenant_name": "APAC_Lab",
+        "record_limit": 80,
+        "format": "json",
+        "destination": {"type": "download"},
+    }
+    created = client.post("/api/export/jobs", json=request)
+    assert created.status_code == 200
+    status, downloaded = wait_for_download(client, created)
+    assert downloaded.status_code == 200
+    assert status["matched_total"] == 125
+    assert status["expected_records"] == 80
+    assert status["summary"]["matched_total"] == 125
+    assert status["summary"]["tenant_name"] == "APAC_Lab"
+
+    history = client.get("/api/export/history?limit=10").json()["jobs"]
+    saved = next(item for item in history if item["job_id"] == created.json()["job_id"])
+    assert saved["matched_total"] == 125
+    assert saved["expected_records"] == 80
+    assert saved["summary"]["tenant_name"] == "APAC_Lab"
+
+
 def test_user_scope_connection_accepts_api_key_without_email(monkeypatch):
     captured = {}
 

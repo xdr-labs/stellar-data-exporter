@@ -129,6 +129,11 @@ class DestinationTestInput(BaseModel):
 
 
 class ExportInput(QueryInput):
+    # Advisory UI metadata captured from the count preflight. These values do not
+    # affect query execution or resume identity; they exist only so progress can
+    # remain understandable across destinations, refreshes, and API restarts.
+    matched_total: int | None = Field(default=None, ge=0)
+    tenant_name: str | None = Field(default=None, max_length=256)
     format: Literal["csv", "json", "ndjson"] = "csv"
     overlap_policy: Literal["allow", "reject"] = "allow"
     compress: bool = False
