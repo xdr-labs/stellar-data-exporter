@@ -171,3 +171,12 @@ details{border-top:1px solid #e5e1e2;padding-top:13px}summary{cursor:pointer;fon
 .host-key-panel span{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:3px}
 .host-key-panel code{display:block;font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:auto;white-space:nowrap}
 @media(max-width:760px){.host-key-panel{grid-template-columns:1fr}.host-key-panel .button{width:100%}}
+
+/* Keep the visible configuration consistent with the immutable payload of an active export. */
+.configuration-locked{position:relative;background:#f8f7f7;border-color:#d8d2d4;box-shadow:none;transition:.15s}
+.configuration-locked::after{content:"LOCKED";position:absolute;top:18px;right:20px;border:1px solid #d8d2d4;border-radius:999px;background:#efeced;color:#70696d;padding:3px 7px;font-size:9px;font-weight:850;letter-spacing:.08em;pointer-events:none}
+.configuration-locked input:disabled,.configuration-locked textarea:disabled,.configuration-locked select:disabled{background:#f1eff0;color:#777074;cursor:not-allowed}
+.configuration-locked .source-option,.configuration-locked .choice,.configuration-locked .destination,.configuration-locked .query-mode{cursor:not-allowed}
+.export-config-locked .ui-mode:disabled{opacity:.55;cursor:not-allowed}
+
+.export-progress-meter{display:flex;align-items:center;gap:10px;margin-top:9px}.export-progress-track{height:8px;flex:1;border-radius:999px;background:#eee9eb;overflow:hidden}.export-progress-fill{height:100%;width:0;background:linear-gradient(90deg,var(--stellar-orange),var(--stellar-gold));border-radius:999px;transition:width .25s ease}.export-progress-meter>strong{min-width:72px;text-align:right;font-size:10px;color:#5b5458}.export-progress-meter.indeterminate .export-progress-fill{width:24%;animation:export-progress-indeterminate 1.2s ease-in-out infinite}@keyframes export-progress-indeterminate{0%{transform:translateX(-120%)}100%{transform:translateX(440%)}}

@@ -23,7 +23,7 @@
         <button id="basicMode" class="ui-mode active" type="button">Basic</button>
         <button id="advancedMode" class="ui-mode" type="button">Advanced</button>
       </div>
-      <span class="secure-badge"><span class="secure-dot"></span> Encrypted saved connection</span>
+      <span class="secure-badge"><span class="secure-dot"></span> Browser-session connection</span>
     </div>
   </header>
 
@@ -519,7 +519,7 @@
             <span>Output</span>
             <span>Destination</span>
           </div>
-          <p class="summary-note final-note">Interactive credentials stay in memory unless you explicitly save the Stellar Cyber connection; saved connection credentials are encrypted at rest.</p>
+          <p class="summary-note final-note">Interactive connection credentials are never stored on the Exporter server. “Remember this session” keeps them only in this browser session; scheduled exports use separate encrypted-at-rest credentials.</p>
           <div id="exportPreflight" class="export-preflight hidden" role="status" aria-live="polite"></div>
           <div id="runStatus" class="status hidden"></div>
           <div id="exportProgress" class="export-progress hidden">
@@ -542,6 +542,10 @@
               <div><span>Adaptive splits</span><strong id="progressAdaptiveSplits">0</strong></div>
               <div><span>Duplicates skipped</span><strong id="progressDuplicates">0</strong></div>
               <div><span>Elapsed</span><strong id="progressElapsed">0s</strong></div>
+            </div>
+            <div id="exportProgressMeter" class="export-progress-meter" role="progressbar" aria-label="Export record progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div class="export-progress-track"><div id="exportProgressBar" class="export-progress-fill"></div></div>
+              <strong id="exportProgressPercent">Waiting for total…</strong>
             </div>
             <div class="export-progress-range">
               <span>Current slice <small>(within the full range in Export Summary)</small></span>

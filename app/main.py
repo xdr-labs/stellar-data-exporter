@@ -391,6 +391,8 @@ def sanitized_export_metadata(payload: ExportInput) -> dict[str, Any]:
         "auth_mode": payload.auth_mode,
         "sources": [getattr(source, "value", str(source)) for source in payload.sources],
         "tenant_id": payload.tenant_id,
+        "tenant_name": (payload.tenant_name or "").strip() or None,
+        "matched_total": payload.matched_total,
         "start": payload.start.isoformat(),
         "end": payload.end.isoformat(),
         "query_mode": payload.query_mode,
@@ -892,10 +894,30 @@ def mark_job_terminal(job: ExportJob, status: str, error: str | None = None) -> 
     persist_job(job, force=True)
 
 
+def progress_totals(metadata: dict[str, Any] | None) -> tuple[int | None, int | None]:
+    metadata = metadata or {}
+    raw_total = metadata.get("matched_total")
+    if raw_total is None:
+        return None, None
+    try:
+        matched_total = max(0, int(raw_total))
+    except (TypeError, ValueError):
+        return None, None
+    raw_limit = metadata.get("record_limit")
+    if raw_limit is None:
+        return matched_total, matched_total
+    try:
+        record_limit = max(0, int(raw_limit))
+    except (TypeError, ValueError):
+        return matched_total, matched_total
+    return matched_total, min(matched_total, record_limit)
+
+
 def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
     end_time = job.completed_at or time.time()
     elapsed = max(0.0, end_time - job.started_at) if job.started_at else 0.0
     rate = (job.records_exported / elapsed) if elapsed > 0 else 0.0
+    matched_total, expected_records = progress_totals(job.metadata)
     return {
         "job_id": job_id,
         "status": job.status,
@@ -903,6 +925,8 @@ def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
         "started_at": job.started_at,
         "completed_at": job.completed_at,
         "summary": job.metadata,
+        "matched_total": matched_total,
+        "expected_records": expected_records,
         "records_exported": job.records_exported,
         "bytes_sent": job.bytes_sent,
         "files_completed": job.files_completed,
@@ -930,6 +954,7 @@ def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
     started_at = record.get("started_at")
     elapsed = max(0.0, end_time - started_at) if started_at else 0.0
     exported = int(record.get("records_exported") or 0)
+    matched_total, expected_records = progress_totals(record.get("metadata") or {})
     return {
         "job_id": record["job_id"],
         "status": record["status"],
@@ -937,6 +962,8 @@ def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
         "started_at": started_at,
         "completed_at": record.get("completed_at"),
         "summary": record.get("metadata", {}),
+        "matched_total": matched_total,
+        "expected_records": expected_records,
         "records_exported": exported,
         "bytes_sent": int(record.get("bytes_sent") or 0),
         "files_completed": int(record.get("files_completed") or 0),
@@ -1868,6 +1895,11 @@ async def resume_export_job(job_id: str, payload: ExportInput) -> dict[str, Any]
         )
 
     validate_resume_payload(record, payload)
+    previous_metadata = record.get("metadata") or {}
+    if payload.matched_total is None and previous_metadata.get("matched_total") is not None:
+        payload.matched_total = int(previous_metadata["matched_total"])
+    if not (payload.tenant_name or "").strip() and previous_metadata.get("tenant_name"):
+        payload.tenant_name = str(previous_metadata["tenant_name"])
     checkpoints = list(record.get("completed_parts") or [])
     detached = detached_jobs_enabled()
     JOB_STORE.clear_cancel_requested(job_id)

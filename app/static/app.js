@@ -13,6 +13,7 @@ const state = {
   previewFields: [],
   selectedFields: [],
   activeExport: null,
+  activeExportSummary: null,
   relativeMinutes: 1440,
   pendingProfileSources: null,
   pendingSelectedFields: null,
@@ -27,6 +28,7 @@ const state = {
 const PROFILE_STORAGE_KEY = "stellarDataExporter.profiles.v1";
 const QUERY_HISTORY_STORAGE_KEY = "stellarDataExporter.queryHistory.v1";
 const CONNECTION_SESSION_STORAGE_KEY = "stellarDataExporter.connectionSession.v1";
+const ACTIVE_EXPORT_SESSION_STORAGE_KEY = "stellarDataExporter.activeExport.v1";
 
 function isoFromLocal(value) {
   if (!value) return null;
@@ -226,6 +228,7 @@ function renderTenants(tenants) {
   }
   updateSaveConnectionAvailability();
   updateSummary();
+  if (state.activeExport) setExportConfigurationLocked(true);
 }
 
 function selectedQueryMode() {
@@ -864,6 +867,8 @@ function exportPayload() {
   }
   return {
     ...basePayload(),
+    tenant_name: selectedTenantName() || null,
+    matched_total: state.previewTotal == null ? null : Number(state.previewTotal),
     selected_fields: isAdvancedMode() && state.previewFields.length ? [...state.selectedFields] : null,
     record_limit: recordLimitValue(),
     format: selectedFormat(),
@@ -1193,6 +1198,124 @@ function setBusy(button, busy, busyText) {
     button.textContent = button.dataset.original || button.textContent;
     button.disabled = false;
   }
+}
+
+const EXPORT_CONFIGURATION_SCOPE = ".content > .card:not(.final-action-card):not(.export-history-card)";
+
+function setControlExportLocked(control, locked) {
+  if (!control) return;
+  if (locked) {
+    if (!("exportLockWasDisabled" in control.dataset)) {
+      control.dataset.exportLockWasDisabled = control.disabled ? "1" : "0";
+    }
+    control.disabled = true;
+    return;
+  }
+  if ("exportLockWasDisabled" in control.dataset) {
+    control.disabled = control.dataset.exportLockWasDisabled === "1";
+    delete control.dataset.exportLockWasDisabled;
+  }
+}
+
+function setExportConfigurationLocked(locked) {
+  document.body.classList.toggle("export-config-locked", locked);
+  document.querySelectorAll(EXPORT_CONFIGURATION_SCOPE).forEach((card) => {
+    card.classList.toggle("configuration-locked", locked);
+    if (locked) card.setAttribute("aria-disabled", "true");
+    else card.removeAttribute("aria-disabled");
+    card.querySelectorAll("input, select, textarea, button").forEach((control) => {
+      setControlExportLocked(control, locked);
+    });
+  });
+  [$("basicMode"), $("advancedMode")].forEach((control) => {
+    setControlExportLocked(control, locked);
+  });
+}
+
+function sanitizedActiveExportSession(active) {
+  if (!active?.jobId) return null;
+  return {
+    jobId: active.jobId,
+    statusUrl: active.statusUrl || `/api/export/jobs/${encodeURIComponent(active.jobId)}`,
+    cancelUrl: active.cancelUrl || `/api/export/jobs/${encodeURIComponent(active.jobId)}/cancel`,
+    mode: active.mode || "background",
+    downloadUrl: active.downloadUrl || null,
+  };
+}
+
+function persistActiveExportSession() {
+  const active = sanitizedActiveExportSession(state.activeExport);
+  if (!active) {
+    sessionStorage.removeItem(ACTIVE_EXPORT_SESSION_STORAGE_KEY);
+    return;
+  }
+  sessionStorage.setItem(ACTIVE_EXPORT_SESSION_STORAGE_KEY, JSON.stringify(active));
+}
+
+function activeSummaryFromPayload(payload) {
+  return {
+    host: payload.host,
+    tenant_id: payload.tenant_id,
+    tenant_name: payload.tenant_name || null,
+    sources: [...(payload.sources || [])],
+    start: payload.start,
+    end: payload.end,
+    format: payload.format,
+    compress: !!payload.compress,
+    max_file_size_bytes: payload.max_file_size_bytes ?? null,
+    record_limit: payload.record_limit ?? null,
+    matched_total: payload.matched_total ?? null,
+    destination_type: payload.destination?.type || "download",
+  };
+}
+
+function sourceSummaryLabels(sources = []) {
+  return sources.map((source) =>
+    state.sourceCatalog.find((item) => item.id === source)?.label
+      || String(source).replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}
+
+function renderActiveExportSummary(summary = state.activeExportSummary) {
+  if (!summary) return;
+  const host = String(summary.host || "").replace(/^https?:\/\//, "");
+  $("summaryHost").textContent = host || "Not set";
+  $("summaryTenant").textContent = summary.tenant_name || summary.tenant_id || "Not selected";
+  const labels = sourceSummaryLabels(summary.sources || []);
+  $("summarySources").textContent = labels.length ? labels.join(", ") : "None";
+  const start = summary.start ? new Date(summary.start) : null;
+  const end = summary.end ? new Date(summary.end) : null;
+  $("summaryRange").textContent = start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())
+    ? `${start.toLocaleString()} → ${end.toLocaleString()}`
+    : "—";
+  $("summaryRecords").textContent = summary.matched_total == null
+    ? "Count unavailable"
+    : Number(summary.matched_total).toLocaleString();
+  const format = String(summary.format || "csv");
+  const formatLabel = format === "json" ? "JSON Array" : format.toUpperCase();
+  $("summaryOutput").textContent = `${formatLabel}${summary.compress ? " · gzip" : ""}`;
+  $("summarySplit").textContent = summary.max_file_size_bytes
+    ? `${humanBytes(summary.max_file_size_bytes)} parts`
+    : "Single file";
+  const destinations = {download: "Browser download", s3: "S3-compatible", sftp: "SFTP"};
+  $("summaryDestination").textContent = destinations[summary.destination_type] || String(summary.destination_type || "—");
+}
+
+function activateExport(active, summary = null) {
+  state.activeExport = sanitizedActiveExportSession(active);
+  state.activeExportSummary = summary || state.activeExportSummary;
+  persistActiveExportSession();
+  setExportConfigurationLocked(true);
+  if (state.activeExportSummary) renderActiveExportSummary();
+}
+
+function finishActiveExport() {
+  state.activeExport = null;
+  state.activeExportSummary = null;
+  sessionStorage.removeItem(ACTIVE_EXPORT_SESSION_STORAGE_KEY);
+  setExportConfigurationLocked(false);
+  $("cancelExport").disabled = true;
+  updateSummary();
 }
 
 const TRANSIENT_EXPORTER_STATUSES = new Set([502, 503, 504]);
@@ -1624,6 +1747,10 @@ function loadSavedConnection() {
 }
 
 function updateSummary() {
+  if (state.activeExportSummary) {
+    renderActiveExportSummary();
+    return;
+  }
   const host = $("host").value.trim();
   $("summaryHost").textContent = host ? host.replace(/^https?:\/\//, "") : "Not set";
   $("summaryTenant").textContent = selectedTenantName() || "Not selected";
@@ -1820,11 +1947,53 @@ function humanDuration(seconds) {
   return `${hours}h ${minutes % 60}m`;
 }
 
+function startCountPreflightTimer(button) {
+  const startedAt = Date.now();
+  const render = () => {
+    const elapsed = humanDuration((Date.now() - startedAt) / 1000);
+    button.textContent = `Checking count… ${elapsed}`;
+    setStatus(
+      "runStatus",
+      `Settings locked. Counting the selected tenant/source/day ranges… ${elapsed} elapsed. Large ranges can take several minutes.`,
+    );
+  };
+  render();
+  const timer = setInterval(render, 1000);
+  return () => clearInterval(timer);
+}
+
+function exportProgressValues(status) {
+  const exported = Number(status.records_exported || 0);
+  const rawExpected = status.expected_records ?? status.summary?.matched_total ?? state.activeExportSummary?.matched_total;
+  const expected = rawExpected == null ? null : Math.max(0, Number(rawExpected));
+  const percent = expected && Number.isFinite(expected)
+    ? Math.min(100, Math.max(0, exported / expected * 100))
+    : null;
+  return {exported, expected, percent};
+}
+
 function renderExportProgress(status) {
+  if (status.summary) {
+    state.activeExportSummary = {...status.summary};
+    renderActiveExportSummary();
+  }
+  if (status.matched_total != null) {
+    state.previewTotal = Number(status.matched_total);
+  }
   $("exportProgress").classList.remove("hidden");
   $("progressStatus").textContent = status.status || "pending";
-  $("progressRecords").textContent = Number(status.records_exported || 0).toLocaleString();
-  $("progressBytes").textContent = humanBytes(status.bytes_sent || 0);
+  const {exported, expected, percent} = exportProgressValues(status);
+  $("progressRecords").textContent = expected == null
+    ? exported.toLocaleString()
+    : `${exported.toLocaleString()} / ${expected.toLocaleString()}`;
+  const destination = status.summary?.destination_type || state.activeExportSummary?.destination_type;
+  const bytes = Number(status.bytes_sent || 0);
+  $("progressBytes").textContent = destination === "download" && bytes === 0 && ["pending", "running"].includes(status.status)
+    ? "Preparing…"
+    : humanBytes(bytes);
+  $("progressBytes").title = destination === "download" && bytes === 0 && ["pending", "running"].includes(status.status)
+    ? "Browser downloads are staged on the Exporter first; final bytes appear when the file is ready."
+    : "";
   $("progressFiles").textContent = Number(status.files_completed || 0).toLocaleString();
   $("progressSource").textContent = status.current_source || "—";
   const partitionNumber = Number(status.partition_number || 0);
@@ -1843,6 +2012,18 @@ function renderExportProgress(status) {
     status.current_slice_start && status.current_slice_end
       ? formatHistoryRange({start: status.current_slice_start, end: status.current_slice_end})
       : "Waiting to start";
+
+  const meter = $("exportProgressMeter");
+  if (percent == null) {
+    meter.classList.add("indeterminate");
+    meter.removeAttribute("aria-valuenow");
+    $("exportProgressPercent").textContent = "Working…";
+  } else {
+    meter.classList.remove("indeterminate");
+    meter.setAttribute("aria-valuenow", String(Math.round(percent)));
+    $("exportProgressBar").style.width = `${percent}%`;
+    $("exportProgressPercent").textContent = `${percent.toFixed(percent >= 10 ? 0 : 1)}%`;
+  }
 
   const terminal = ["completed", "failed", "cancelled"].includes(status.status);
   $("cancelExport").disabled = terminal || !!status.cancel_requested || !state.activeExport;
@@ -1871,7 +2052,7 @@ async function cancelExport() {
 
 async function pollExport(statusUrl) {
   for (;;) {
-    const status = await api(statusUrl);
+    const status = await api(statusUrl, {retryTransient: true});
     renderExportProgress(status);
     if (status.status === "completed") {
       setStatus(
@@ -1886,16 +2067,21 @@ async function pollExport(statusUrl) {
       return status;
     }
     if (status.status === "failed") {
-      throw new Error(status.error || "Export failed.");
+      setStatus("runStatus", status.error || "Export failed.", "error");
+      return status;
     }
     const verb = status.cancel_requested ? "Cancelling" : status.status === "pending" ? "Preparing" : "Exporting";
     const adaptiveSplits = Number(status.adaptive_split_count || 0);
     const adaptiveNote = adaptiveSplits > 0
       ? ` · ${adaptiveSplits.toLocaleString()} adaptive split${adaptiveSplits === 1 ? "" : "s"}`
       : "";
+    const {exported, expected, percent} = exportProgressValues(status);
+    const progressNote = expected == null
+      ? `${exported.toLocaleString()} records`
+      : `${exported.toLocaleString()} / ${expected.toLocaleString()} records · ${percent.toFixed(percent >= 10 ? 0 : 1)}%`;
     setStatus(
       "runStatus",
-      `${verb}… ${Number(status.records_exported || 0).toLocaleString()} records · ${humanBytes(status.bytes_sent)} transferred${adaptiveNote}.`,
+      `${verb}… ${progressNote} · ${humanBytes(status.bytes_sent)} transferred${adaptiveNote}. Settings remain locked to this job.`,
     );
     await wait(500);
   }
@@ -2117,21 +2303,34 @@ async function deleteSchedule(scheduleId) {
 
 async function resumeExport(jobId, button) {
   if (!jobId) return;
+  let configurationLocked = false;
+  let jobStarted = false;
+  let terminalReached = false;
   try {
     if (state.activeExport) throw new Error("Another export is already active.");
+    const payload = exportPayload();
+    setExportConfigurationLocked(true);
+    configurationLocked = true;
     setBusy(button, true, "Resuming…");
-    setStatus("runStatus", "Validating saved checkpoint against the current export settings…");
+    setStatus("runStatus", "Settings locked. Validating saved checkpoint against the current export settings…");
     const result = await api(`/api/export/jobs/${encodeURIComponent(jobId)}/resume`, {
       method: "POST",
-      body: JSON.stringify(exportPayload()),
+      body: JSON.stringify(payload),
     });
-    state.activeExport = {
+    activateExport({
       jobId: result.job_id,
       statusUrl: result.status_url,
       cancelUrl: result.cancel_url,
-    };
+      mode: "background",
+    }, activeSummaryFromPayload(payload));
+    jobStarted = true;
     renderExportProgress({
       status: "pending",
+      summary: state.activeExportSummary,
+      matched_total: payload.matched_total,
+      expected_records: payload.matched_total == null
+        ? null
+        : Math.min(Number(payload.matched_total), payload.record_limit == null ? Number(payload.matched_total) : Number(payload.record_limit)),
       records_exported: 0,
       bytes_sent: 0,
       files_completed: result.resumed_from_parts || 0,
@@ -2142,15 +2341,33 @@ async function resumeExport(jobId, button) {
     });
     setStatus(
       "runStatus",
-      `Resuming export after ${result.resumed_from_parts || 0} verified completed part(s)…`,
+      `Resuming export after ${result.resumed_from_parts || 0} verified completed part(s)… Settings remain locked to this job.`,
     );
-    await pollExport(result.status_url);
+    const finalStatus = await pollExport(result.status_url);
+    terminalReached = ["completed", "failed", "cancelled"].includes(finalStatus.status);
   } catch (error) {
-    setStatus("runStatus", error.message, "error");
+    if (jobStarted && !terminalReached) {
+      setStatus(
+        "runStatus",
+        `${error.message} The export may still be running. Settings remain locked; reload this page to reconnect safely.`,
+        "warning",
+      );
+    } else {
+      setStatus("runStatus", error.message, "error");
+    }
   } finally {
-    state.activeExport = null;
-    $("cancelExport").disabled = true;
-    if (button?.isConnected) setBusy(button, false);
+    if (terminalReached) {
+      finishActiveExport();
+    } else if (!jobStarted && configurationLocked) {
+      setExportConfigurationLocked(false);
+    }
+    if (button?.isConnected) {
+      if (terminalReached || !jobStarted) setBusy(button, false);
+      else {
+        button.disabled = true;
+        button.textContent = "Export running…";
+      }
+    }
     await loadExportHistory();
   }
 }
@@ -2205,17 +2422,28 @@ function confirmLargeExport(result) {
 
 async function runExport() {
   const button = $("runExport");
+  let configurationLocked = false;
+  let jobStarted = false;
+  let terminalReached = false;
+  let stopPreflightTimer = null;
   try {
     if (state.activeExport) throw new Error("Another export is already active.");
-    setBusy(button, true, "Checking count…");
     const payload = exportPayload();
-    setStatus("runStatus", "Checking matched record count for the selected tenant before export…");
+    const countPayload = basePayload();
+    setExportConfigurationLocked(true);
+    configurationLocked = true;
+    setBusy(button, true, "Checking count…");
+    stopPreflightTimer = startCountPreflightTimer(button);
     const countResult = await api("/api/query/count", {
       method: "POST",
       retryTransient: true,
-      body: JSON.stringify(basePayload()),
+      body: JSON.stringify(countPayload),
     });
+    stopPreflightTimer?.();
+    stopPreflightTimer = null;
     const matchedTotal = Number(countResult.total || 0);
+    payload.matched_total = matchedTotal;
+    payload.tenant_name = selectedTenantName() || payload.tenant_name || null;
     state.previewTotal = matchedTotal;
     renderExportPreflight(countResult, payload);
     updateSummary();
@@ -2243,19 +2471,28 @@ async function runExport() {
     }
 
     button.textContent = "Running export…";
-    setStatus("runStatus", `Count check complete: ${matchedTotal.toLocaleString()} records. Creating export job…`);
+    setStatus("runStatus", `Count check complete: ${matchedTotal.toLocaleString()} records. Creating locked export job…`);
     const result = await api("/api/export/jobs", {
       method: "POST",
       body: JSON.stringify(payload),
     });
 
-    state.activeExport = {
+    activateExport({
       jobId: result.job_id,
       statusUrl: result.status_url,
       cancelUrl: result.cancel_url,
-    };
+      mode: result.mode,
+      downloadUrl: result.download_url || null,
+    }, activeSummaryFromPayload(payload));
+    jobStarted = true;
+    const expectedRecords = payload.record_limit == null
+      ? matchedTotal
+      : Math.min(matchedTotal, Number(payload.record_limit));
     renderExportProgress({
       status: "pending",
+      summary: state.activeExportSummary,
+      matched_total: matchedTotal,
+      expected_records: expectedRecords,
       records_exported: 0,
       bytes_sent: 0,
       files_completed: 0,
@@ -2266,9 +2503,10 @@ async function runExport() {
     });
 
     if (result.mode === "download") {
-      setStatus("runStatus", "Preparing the browser download on the server…");
+      setStatus("runStatus", "Preparing the browser download on the server… Settings remain locked to this job.");
     }
     const finalStatus = await pollExport(result.status_url);
+    terminalReached = ["completed", "failed", "cancelled"].includes(finalStatus.status);
     if (result.mode === "download" && finalStatus.status === "completed") {
       $("downloadFrame").src = `${result.download_url}?ready=${Date.now()}`;
       setStatus(
@@ -2278,12 +2516,91 @@ async function runExport() {
       );
     }
   } catch (error) {
-    setStatus("runStatus", error.message, "error");
+    if (jobStarted && !terminalReached) {
+      setStatus(
+        "runStatus",
+        `${error.message} The export may still be running. Settings remain locked; reload this page to reconnect safely.`,
+        "warning",
+      );
+    } else {
+      setStatus("runStatus", error.message, "error");
+    }
   } finally {
-    state.activeExport = null;
-    $("cancelExport").disabled = true;
-    setBusy(button, false);
+    stopPreflightTimer?.();
+    if (terminalReached) {
+      finishActiveExport();
+    } else if (!jobStarted && configurationLocked) {
+      setExportConfigurationLocked(false);
+    }
+    if (terminalReached || !jobStarted) setBusy(button, false);
+    else {
+      button.disabled = true;
+      button.textContent = "Export running…";
+    }
     await loadExportHistory();
+  }
+}
+
+async function restoreActiveExportSession() {
+  let saved;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(ACTIVE_EXPORT_SESSION_STORAGE_KEY) || "null");
+  } catch {
+    sessionStorage.removeItem(ACTIVE_EXPORT_SESSION_STORAGE_KEY);
+    return;
+  }
+  if (!saved?.jobId) return;
+
+  activateExport(saved);
+  const button = $("runExport");
+  button.disabled = true;
+  button.textContent = "Reconnecting export…";
+  setStatus("runStatus", "Reconnecting to the active export. Settings are locked until the job reaches a terminal state…", "warning");
+  try {
+    const status = await api(state.activeExport.statusUrl, {retryTransient: true});
+    const terminal = ["completed", "failed", "cancelled"].includes(status.status);
+    if (terminal) {
+      renderExportProgress(status);
+      if (saved.mode === "download" && status.status === "completed" && saved.downloadUrl) {
+        $("downloadFrame").src = `${saved.downloadUrl}?ready=${Date.now()}`;
+        setStatus("runStatus", "Export completed while this page was reconnecting. Download started.", "success");
+      }
+      finishActiveExport();
+      button.disabled = false;
+      button.textContent = "Run export";
+      await loadExportHistory();
+      return;
+    }
+
+    state.activeExportSummary = status.summary || null;
+    if (status.matched_total != null) state.previewTotal = Number(status.matched_total);
+    renderActiveExportSummary();
+    renderExportProgress(status);
+    button.textContent = "Running export…";
+    setStatus("runStatus", "Reconnected to the active export. Original settings remain locked to this job.");
+    const finalStatus = await pollExport(state.activeExport.statusUrl);
+    if (state.activeExport.mode === "download" && finalStatus.status === "completed" && state.activeExport.downloadUrl) {
+      $("downloadFrame").src = `${state.activeExport.downloadUrl}?ready=${Date.now()}`;
+    }
+    finishActiveExport();
+    button.disabled = false;
+    button.textContent = "Run export";
+    await loadExportHistory();
+  } catch (error) {
+    if (String(error.message || "").includes("HTTP 404")) {
+      finishActiveExport();
+      button.disabled = false;
+      button.textContent = "Run export";
+      setStatus("runStatus", "The previously active export is no longer available. Settings were unlocked.", "warning");
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Export status unavailable";
+    setStatus(
+      "runStatus",
+      `${error.message} Settings remain locked because the saved job may still be running. Reload to retry status recovery.`,
+      "warning",
+    );
   }
 }
 
@@ -2334,6 +2651,7 @@ function renderSources(items) {
   state.pendingProfileSources = null;
   updateSummary();
   refreshIndexPlan();
+  if (state.activeExport) setExportConfigurationLocked(true);
 }
 
 async function loadDataSources() {
@@ -2538,6 +2856,7 @@ function initialize() {
   loadDataSources();
   loadExportHistory();
   loadSchedules();
+  void restoreActiveExportSession();
 }
 
 initialize();
