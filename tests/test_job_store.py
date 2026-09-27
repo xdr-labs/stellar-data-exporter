@@ -146,6 +146,14 @@ def test_job_store_migrates_existing_database_for_completed_part_checkpoints(tmp
     }
     assert "checkpoint_json" in columns
     assert "duplicates_skipped" in columns
+    assert "adaptive_split_count" in columns
+    assert "current_source" in columns
+    assert "partition_number" in columns
+    assert "partition_total" in columns
+    assert "worker_pid" in columns
+    assert "download_path" in columns
+    assert "download_filename" in columns
+    assert "download_media_type" in columns
 
     record = {
         "job_id": "migrated",
