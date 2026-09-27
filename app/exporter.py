@@ -5,6 +5,7 @@ import csv
 import gzip
 import io
 import json
+import math
 import os
 import tempfile
 import zlib
@@ -153,32 +154,63 @@ class ExportEngine:
             raise RuntimeError("Stellar Cyber did not return an exact hit count")
         return count
 
-    async def _fetch(
+    def _seed_slices(
+        self,
+        count: int,
+    ) -> list[tuple[datetime, datetime]]:
+        if count <= 0:
+            return []
+
+        duration = self.end - self.start
+        if duration <= self.minimum_slice:
+            return [(self.start, self.end)]
+
+        # Keep planned slices below the hard target so moderately uneven event
+        # density does not immediately trigger another binary split.
+        planned_records = max(1, int(self.target_records * 0.8))
+        desired = max(1, math.ceil(count / planned_records))
+        max_slices = max(1, int(duration / self.minimum_slice))
+        slice_count = min(desired, max_slices)
+
+        slices: list[tuple[datetime, datetime]] = []
+        for index in range(slice_count):
+            start = self.start + duration * index / slice_count
+            end = (
+                self.end
+                if index + 1 == slice_count
+                else self.start + duration * (index + 1) / slice_count
+            )
+            slices.append((start, end))
+        return slices
+
+    async def _fetch_probe(
         self,
         start: datetime,
         end: datetime,
-    ) -> tuple[list[tuple[dict[str, Any], tuple[str, str] | None]], int]:
+    ) -> list[tuple[dict[str, Any], tuple[str, str] | None]]:
+        # Each source/day partition gets one exact count up front. Inside that
+        # partition, target+1 is enough to prove a slice is still too dense,
+        # avoiding repeated exact counts while preserving complete export coverage.
         body = build_document_query(
             self.raw_query,
             time_field=self.time_field,
             start=start,
             end=end,
-            size=self.target_records,
-            track_total_hits=True,
+            size=self.target_records + 1,
+            track_total_hits=False,
         )
         self._mark_query()
         response = await self.client.search(self.index, body)
-        count, exact = total_hits(response)
-        if not exact:
-            raise RuntimeError("Stellar Cyber did not return an exact hit count")
         hits = response.get("hits", {}).get("hits", [])
         return [
             (hit_source(hit), hit_identity(hit))
             for hit in hits
-        ], count
+        ]
 
     async def iter_documents(self) -> AsyncIterator[dict[str, Any]]:
-        stack: list[tuple[datetime, datetime]] = [(self.start, self.end)]
+        initial_count = await self._count(self.start, self.end)
+        # Reverse because stack.pop() should process the oldest range first.
+        stack = list(reversed(self._seed_slices(initial_count)))
         emitted = 0
         seen_identities: set[tuple[str, str]] = set()
         while stack:
@@ -186,26 +218,9 @@ class ExportEngine:
             start, end = stack.pop()
             if self.on_slice:
                 self.on_slice(start, end)
-            count = await self._count(start, end)
-            if count == 0:
-                continue
-
             duration = end - start
-            if count > self.target_records:
-                if duration <= self.minimum_slice:
-                    raise DenseSliceError(
-                        f"{count} records remain inside the minimum "
-                        f"{self.minimum_slice.total_seconds() * 1000:.0f} ms slice"
-                    )
-                if self.on_adaptive_split:
-                    self.on_adaptive_split()
-                midpoint = start + duration / 2
-                stack.append((midpoint, end))
-                stack.append((start, midpoint))
-                continue
-
             try:
-                records, actual_count = await self._fetch(start, end)
+                records = await self._fetch_probe(start, end)
             except StellarReadTimeoutError:
                 if duration <= self.minimum_slice:
                     raise
@@ -216,10 +231,14 @@ class ExportEngine:
                 stack.append((start, midpoint))
                 continue
 
-            if actual_count > self.target_records:
+            if not records:
+                continue
+
+            if len(records) > self.target_records:
                 if duration <= self.minimum_slice:
                     raise DenseSliceError(
-                        f"{actual_count} records arrived inside the minimum slice"
+                        f"More than {self.target_records} records remain inside "
+                        f"the minimum {self.minimum_slice.total_seconds() * 1000:.0f} ms slice"
                     )
                 if self.on_adaptive_split:
                     self.on_adaptive_split()

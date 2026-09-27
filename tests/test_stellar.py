@@ -344,3 +344,44 @@ async def test_document_read_timeout_is_returned_for_adaptive_split_without_retr
 
     assert "smaller adaptive time slices" in str(excinfo.value)
     assert calls == {"search": 1, "retry": 0}
+
+
+@pytest.mark.asyncio
+async def test_client_context_reuses_one_http_session_across_export_probes():
+    calls = {"token": 0, "search": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/api/v1/access_token":
+            calls["token"] += 1
+            return httpx.Response(200, json={"access_token": "jwt-1"})
+        if request.url.path.endswith("/_search"):
+            calls["search"] += 1
+            return httpx.Response(
+                200,
+                json={"hits": {"total": {"value": 0, "relation": "gte"}, "hits": []}},
+            )
+        raise AssertionError(f"Unexpected URL: {request.url}")
+
+    client = StellarClient(
+        "https://stellar.example.test",
+        "admin@example.test",
+        "refresh-token",
+        transport=httpx.MockTransport(handler),
+        tenant_id="tenant-1",
+    )
+
+    async with client:
+        shared = client._shared_client
+        assert shared is not None
+        body = {
+            "size": 1001,
+            "track_total_hits": False,
+            "query": {"match_all": {}},
+        }
+        await client.search("aella-ser-*", body)
+        assert client._shared_client is shared
+        await client.search("aella-ser-*", body)
+        assert client._shared_client is shared
+
+    assert client._shared_client is None
+    assert calls == {"token": 1, "search": 2}

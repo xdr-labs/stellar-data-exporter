@@ -17,12 +17,16 @@ class FakeClient:
         seconds = (end - start).total_seconds()
         self.calls.append((start, end, body["size"]))
         total = int(seconds * 2)
-
         if body["size"] == 0:
+            assert body["track_total_hits"] is True
             return {"hits": {"total": {"value": total, "relation": "eq"}, "hits": []}}
 
-        hits = [{"_source": {"timestamp": start.isoformat(), "n": i}} for i in range(total)]
-        return {"hits": {"total": {"value": total, "relation": "eq"}, "hits": hits}}
+        assert body["track_total_hits"] is False
+        hits = [
+            {"_source": {"timestamp": start.isoformat(), "n": i}}
+            for i in range(min(total, body["size"]))
+        ]
+        return {"hits": {"total": {"value": total, "relation": "gte"}, "hits": hits}}
 
 
 @pytest.mark.asyncio
@@ -48,10 +52,11 @@ async def test_engine_splits_large_time_ranges_until_under_target():
 
     records = [record async for record in engine.iter_documents()]
     assert len(records) == 20
-    assert adaptive_splits == 3
+    assert adaptive_splits == 0
+    count_calls = [size for _, _, size in client.calls if size == 0]
     fetch_sizes = [size for _, _, size in client.calls if size > 0]
-    assert fetch_sizes
-    assert all(size == 5 for size in fetch_sizes)
+    assert count_calls == [0]
+    assert fetch_sizes == [6, 6, 6, 6, 6]
 
 
 @pytest.mark.asyncio
@@ -71,8 +76,10 @@ async def test_engine_stops_exactly_at_global_record_limit():
 
     records = [record async for record in engine.iter_documents()]
     assert len(records) == 7
+    count_calls = [size for _, _, size in client.calls if size == 0]
     fetch_sizes = [size for _, _, size in client.calls if size > 0]
-    assert len(fetch_sizes) == 2
+    assert count_calls == [0]
+    assert fetch_sizes == [6, 6]
 
 
 @pytest.mark.asyncio

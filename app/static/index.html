@@ -447,7 +447,7 @@
           <summary>Adaptive export settings</summary>
           <div class="grid two advanced">
             <label>Target records / slice
-              <input id="targetRecords" type="number" min="100" max="50000" value="250" />
+              <input id="targetRecords" type="number" min="100" max="50000" value="1000" />
             </label>
             <label>Minimum slice (ms)
               <input id="minimumSlice" type="number" min="1" max="60000" value="1" />
@@ -459,7 +459,7 @@
               </select>
             </label>
           </div>
-          <p class="hint">Adaptive slices use half-open time ranges. Large result sets are split by record count, and slow document responses are automatically bisected into smaller time ranges. Reject overlap blocks matching export pipelines whose requested time windows intersect; adjacent ranges are allowed.</p>
+          <p class="hint">Large exports are first partitioned by data source and into windows of at most 24 hours. Each partition uses lightweight target+1 probes without repeated exact counts; oversized or slow responses are bisected into smaller half-open time slices. Reject overlap blocks matching export pipelines whose requested time windows intersect; adjacent ranges are allowed.</p>
         </details>
       </section>
 
@@ -535,6 +535,8 @@
               <div><span>Transferred</span><strong id="progressBytes">0 B</strong></div>
               <div><span>Files</span><strong id="progressFiles">0</strong></div>
               <div><span>Rate</span><strong id="progressRate">0 rec/s</strong></div>
+              <div><span>Source</span><strong id="progressSource">—</strong></div>
+              <div><span>Partition</span><strong id="progressPartition">0 / 0</strong></div>
               <div><span>Queries</span><strong id="progressQueries">0</strong></div>
               <div><span>Retries</span><strong id="progressRetries">0</strong></div>
               <div><span>Adaptive splits</span><strong id="progressAdaptiveSplits">0</strong></div>
@@ -542,7 +544,7 @@
               <div><span>Elapsed</span><strong id="progressElapsed">0s</strong></div>
             </div>
             <div class="export-progress-range">
-              <span>Current range</span>
+              <span>Current slice <small>(within the full range in Export Summary)</small></span>
               <code id="progressRange">Waiting to start</code>
             </div>
           </div>

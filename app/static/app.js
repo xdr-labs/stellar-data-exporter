@@ -315,7 +315,7 @@ function resetAdvancedDefaults() {
   $("maxFileSizeUnit").value = "mb";
   $("s3PathStyle").checked = false;
   $("sftpVerifyHostKey").checked = true;
-  $("targetRecords").value = "250";
+  $("targetRecords").value = "1000";
   $("minimumSlice").value = "1";
   $("overlapPolicy").value = "allow";
   $("resolvedIndices").classList.add("hidden");
@@ -616,8 +616,8 @@ function renderInspector(plan, target) {
   }
   $("inspectorExportLimit").textContent = limitText;
 
-  const targetRecords = Number($("targetRecords").value || 250);
-  $("inspectorAdaptiveSlicing").textContent = "Enabled · count + slow-response bisect";
+  const targetRecords = Number($("targetRecords").value || 1000);
+  $("inspectorAdaptiveSlicing").textContent = "Enabled · source/day partition + target+1 probe";
   $("inspectorTargetRecords").textContent = Number.isFinite(targetRecords)
     ? targetRecords.toLocaleString()
     : "—";
@@ -730,7 +730,7 @@ function basePayload() {
     end,
     ...queryPayloadFields(),
     preview_limit: 100,
-    target_records_per_slice: Number($("targetRecords").value || 250),
+    target_records_per_slice: Number($("targetRecords").value || 1000),
     minimum_slice_ms: Number($("minimumSlice").value || 1),
   };
 }
@@ -949,7 +949,7 @@ function exportProfileSnapshot() {
     csv_bom: $("csvBom").checked,
     csv_flatten_nested: $("csvFlatten").checked,
     destination: nonSecretDestinationProfile(),
-    target_records_per_slice: Number($("targetRecords").value || 250),
+    target_records_per_slice: Number($("targetRecords").value || 1000),
     minimum_slice_ms: Number($("minimumSlice").value || 1),
     overlap_policy: $("overlapPolicy").value || "allow",
   };
@@ -1055,7 +1055,7 @@ function applyProfileSettings(settings) {
     );
   }
 
-  $("targetRecords").value = String(settings.target_records_per_slice || 250);
+  $("targetRecords").value = String(settings.target_records_per_slice || 1000);
   $("minimumSlice").value = String(settings.minimum_slice_ms || 1);
   $("overlapPolicy").value = settings.overlap_policy || "allow";
 
@@ -1826,6 +1826,12 @@ function renderExportProgress(status) {
   $("progressRecords").textContent = Number(status.records_exported || 0).toLocaleString();
   $("progressBytes").textContent = humanBytes(status.bytes_sent || 0);
   $("progressFiles").textContent = Number(status.files_completed || 0).toLocaleString();
+  $("progressSource").textContent = status.current_source || "—";
+  const partitionNumber = Number(status.partition_number || 0);
+  const partitionTotal = Number(status.partition_total || 0);
+  $("progressPartition").textContent = partitionTotal > 0
+    ? `${partitionNumber.toLocaleString()} / ${partitionTotal.toLocaleString()}`
+    : "0 / 0";
   $("progressQueries").textContent = Number(status.query_count || 0).toLocaleString();
   $("progressRetries").textContent = Number(status.retry_count || 0).toLocaleString();
   $("progressAdaptiveSplits").textContent = Number(status.adaptive_split_count || 0).toLocaleString();

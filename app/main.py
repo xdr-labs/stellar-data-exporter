@@ -76,6 +76,7 @@ STATIC_DIR = PACKAGE_DIR / "static"
 STATE_DIR = default_state_dir(PACKAGE_DIR)
 DOWNLOAD_JOB_TTL_SECONDS = 600
 HISTORY_JOB_TTL_SECONDS = 3600
+EXPORT_PARTITION_MAX_DURATION = timedelta(days=1)
 JOB_DB_PATH = Path(os.environ.get("STELLAR_EXPORTER_JOB_DB", str(STATE_DIR / "export-jobs.sqlite3")))
 SCHEDULE_DB_PATH = Path(
     os.environ.get(
@@ -128,6 +129,9 @@ class ExportJob:
     duplicates_skipped: int = 0
     current_slice_start: str | None = None
     current_slice_end: str | None = None
+    current_source: str | None = None
+    partition_number: int = 0
+    partition_total: int = 0
     cancel_requested: bool = False
     result: str | None = None
     error: str | None = None
@@ -480,6 +484,23 @@ def safe_filename(name: str | None, fmt: str, compressed: bool) -> str:
     return candidate
 
 
+def export_partitions(sources, start: datetime, end: datetime):
+    unique_sources = list(dict.fromkeys(sources))
+    cursor = start
+    windows: list[tuple[datetime, datetime]] = []
+    while cursor < end:
+        window_end = min(end, cursor + EXPORT_PARTITION_MAX_DURATION)
+        windows.append((cursor, window_end))
+        cursor = window_end
+
+    total = len(windows) * len(unique_sources)
+    number = 0
+    for window_start, window_end in windows:
+        for source in unique_sources:
+            number += 1
+            yield number, total, source, window_start, window_end
+
+
 def build_export_source(payload: ExportInput, job: ExportJob | None = None):
     def add_retry(count: int) -> None:
         if job is not None:
@@ -515,30 +536,55 @@ def build_export_source(payload: ExportInput, job: ExportJob | None = None):
         if job is not None:
             job.adaptive_split_count += 1
 
-    engine = ExportEngine(
-        client,
-        index=plan_indices(payload.sources, start=payload.start, end=payload.end).target,
-        raw_query=raw_query,
-        time_field=payload.time_field,
-        start=payload.start,
-        end=payload.end,
-        target_records=payload.target_records_per_slice,
-        minimum_slice_ms=payload.minimum_slice_ms,
-        max_records=payload.record_limit,
-        on_query=on_query if job is not None else None,
-        on_slice=on_slice if job is not None else None,
-        on_record=on_record if job is not None else None,
-        on_duplicate=on_duplicate if job is not None else None,
-        on_adaptive_split=on_adaptive_split if job is not None else None,
-        cancel_check=(lambda: job.cancel_requested) if job is not None else None,
-    )
+    async def partitioned_records():
+        emitted = 0
+        partitions = list(export_partitions(payload.sources, payload.start, payload.end))
+        async with client:
+            for number, total, source, partition_start, partition_end in partitions:
+                if payload.record_limit is not None and emitted >= payload.record_limit:
+                    return
+
+                if job is not None:
+                    job.current_source = source_labels([source])[0]
+                    job.partition_number = number
+                    job.partition_total = total
+
+                remaining = (
+                    None
+                    if payload.record_limit is None
+                    else max(0, payload.record_limit - emitted)
+                )
+                engine = ExportEngine(
+                    client,
+                    index=plan_indices(
+                        [source],
+                        start=partition_start,
+                        end=partition_end,
+                    ).target,
+                    raw_query=raw_query,
+                    time_field=payload.time_field,
+                    start=partition_start,
+                    end=partition_end,
+                    target_records=payload.target_records_per_slice,
+                    minimum_slice_ms=payload.minimum_slice_ms,
+                    max_records=remaining,
+                    on_query=on_query if job is not None else None,
+                    on_slice=on_slice if job is not None else None,
+                    on_record=on_record if job is not None else None,
+                    on_duplicate=on_duplicate if job is not None else None,
+                    on_adaptive_split=on_adaptive_split if job is not None else None,
+                    cancel_check=(lambda: job.cancel_requested) if job is not None else None,
+                )
+                async for record in engine.iter_documents():
+                    emitted += 1
+                    yield record
 
     preferred_fields = None
     requested_source = raw_query.get("_source")
     if isinstance(requested_source, list):
         preferred_fields = [str(field) for field in requested_source]
 
-    records = engine.iter_documents()
+    records = partitioned_records()
     if payload.selected_fields:
         records = project_records(records, payload.selected_fields)
         preferred_fields = list(payload.selected_fields)
@@ -623,6 +669,9 @@ def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
         "files_completed": job.files_completed,
         "current_slice_start": job.current_slice_start,
         "current_slice_end": job.current_slice_end,
+        "current_source": job.current_source,
+        "partition_number": job.partition_number,
+        "partition_total": job.partition_total,
         "query_count": job.query_count,
         "retry_count": job.retry_count,
         "adaptive_split_count": job.adaptive_split_count,
@@ -654,6 +703,9 @@ def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
         "files_completed": int(record.get("files_completed") or 0),
         "current_slice_start": record.get("current_slice_start"),
         "current_slice_end": record.get("current_slice_end"),
+        "current_source": None,
+        "partition_number": 0,
+        "partition_total": 0,
         "query_count": int(record.get("query_count") or 0),
         "retry_count": int(record.get("retry_count") or 0),
         "adaptive_split_count": 0,
