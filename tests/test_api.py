@@ -607,17 +607,32 @@ def test_browser_download_is_only_available_after_complete_and_has_content_lengt
         assert downloaded.headers["content-disposition"] == 'attachment; filename="ready-only.csv"'
 
 
-def test_long_multi_source_count_keeps_one_exact_preflight_query(monkeypatch):
+def test_long_multi_source_count_uses_bounded_source_day_partitions(monkeypatch):
     calls = []
+    active = 0
+    peak_active = 0
+    lock = asyncio.Lock()
 
-    async def count_once(self, index, body):
-        calls.append((index, body["size"], body["track_total_hits"]))
+    async def partitioned_count(self, index, body):
+        nonlocal active, peak_active
+        bounds = body["query"]["bool"]["filter"][0]["range"]["timestamp"]
+        start = datetime.fromisoformat(bounds["gte"])
+        end = datetime.fromisoformat(bounds["lt"])
+        async with lock:
+            active += 1
+            peak_active = max(peak_active, active)
+        await asyncio.sleep(0.01)
+        async with lock:
+            active -= 1
+
+        calls.append((index, start, end, body["size"], body["track_total_hits"]))
+        assert end - start <= timedelta(days=1)
         return {
-            "took": 42,
-            "hits": {"total": {"value": 140_000, "relation": "eq"}, "hits": []},
+            "took": 3,
+            "hits": {"total": {"value": 10_000, "relation": "eq"}, "hits": []},
         }
 
-    monkeypatch.setattr(StellarClient, "search", count_once)
+    monkeypatch.setattr(StellarClient, "search", partitioned_count)
     request = payload()
     request["sources"] = ["syslog", "traffic"]
     request["start"] = datetime(2026, 9, 20, tzinfo=UTC).isoformat()
@@ -626,9 +641,15 @@ def test_long_multi_source_count_keeps_one_exact_preflight_query(monkeypatch):
     response = TestClient(app).post("/api/query/count", json=request)
 
     assert response.status_code == 200
-    assert response.json()["total"] == 140_000
-    assert response.json()["took_ms"] == 42
-    assert calls == [("aella-syslog-*,aella-adr-*", 0, True)]
+    body = response.json()
+    assert body["total"] == 140_000
+    assert body["took_ms"] == 42
+    assert body["count_partitions"] == 14
+    assert len(calls) == 14
+    assert 1 < peak_active <= main_app.COUNT_PARTITION_CONCURRENCY
+    assert all(size == 0 for _, _, _, size, _ in calls)
+    assert all(track is True for _, _, _, _, track in calls)
+    assert {index for index, *_ in calls} == {"aella-syslog-*", "aella-adr-*"}
 
 
 def test_long_multi_source_export_streams_source_day_partitions(monkeypatch):

@@ -2163,10 +2163,14 @@ function renderExportPreflight(result, exportConfig = null) {
   const limitNote = recordLimit != null
     ? ` Export output is limited to ${Number(recordLimit).toLocaleString()} records, but the source query still matched ${total.toLocaleString()} records.`
     : "";
+  const countPartitions = Number(result.count_partitions || 1);
+  const partitionNote = countPartitions > 1
+    ? ` Count was evaluated across ${countPartitions.toLocaleString()} source/day partitions to avoid one long-running raw-data count query.`
+    : "";
   box.className = "export-preflight" + (level === "normal" ? "" : " " + level);
   box.textContent = level === "normal"
-    ? `Count check complete: ${total.toLocaleString()} records matched the selected tenant, data sources, time range and query.${limitNote}`
-    : `⚠ ${total.toLocaleString()} records matched. ${result.warning || "This large export may degrade system performance."}${limitNote}`;
+    ? `Count check complete: ${total.toLocaleString()} records matched the selected tenant, data sources, time range and query.${partitionNote}${limitNote}`
+    : `⚠ ${total.toLocaleString()} records matched. ${result.warning || "This large export may degrade system performance."}${partitionNote}${limitNote}`;
 }
 
 function confirmLargeExport(result) {

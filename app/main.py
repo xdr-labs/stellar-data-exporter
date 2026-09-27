@@ -77,6 +77,7 @@ STATE_DIR = default_state_dir(PACKAGE_DIR)
 DOWNLOAD_JOB_TTL_SECONDS = 600
 HISTORY_JOB_TTL_SECONDS = 3600
 EXPORT_PARTITION_MAX_DURATION = timedelta(days=1)
+COUNT_PARTITION_CONCURRENCY = 2
 JOB_DB_PATH = Path(os.environ.get("STELLAR_EXPORTER_JOB_DB", str(STATE_DIR / "export-jobs.sqlite3")))
 SCHEDULE_DB_PATH = Path(
     os.environ.get(
@@ -1283,21 +1284,43 @@ async def query_count(payload: QueryInput) -> dict[str, Any]:
         payload.query,
         payload.stellar_query,
     )
-    body = build_document_query(
-        raw_query,
-        time_field=payload.time_field,
-        start=payload.start,
-        end=payload.end,
-        size=0,
-        track_total_hits=True,
-    )
-    indices = plan_indices(payload.sources, start=payload.start, end=payload.end).target
+    partitions = list(export_partitions(payload.sources, payload.start, payload.end))
+    semaphore = asyncio.Semaphore(COUNT_PARTITION_CONCURRENCY)
+    client = client_for(payload)
+
+    async def count_partition(source, partition_start, partition_end):
+        body = build_document_query(
+            raw_query,
+            time_field=payload.time_field,
+            start=partition_start,
+            end=partition_end,
+            size=0,
+            track_total_hits=True,
+        )
+        indices = plan_indices(
+            [source],
+            start=partition_start,
+            end=partition_end,
+        ).target
+        async with semaphore:
+            response = await client.search(indices, body)
+        count, exact = total_hits(response)
+        return count, exact, int(response.get("took") or 0)
+
     try:
-        response = await client_for(payload).search(indices, body)
+        async with client:
+            results = await asyncio.gather(
+                *[
+                    count_partition(source, partition_start, partition_end)
+                    for _, _, source, partition_start, partition_end in partitions
+                ]
+            )
     except StellarAPIError as exc:
         raise stellar_http_error(exc) from exc
 
-    total, exact = total_hits(response)
+    total = sum(item[0] for item in results)
+    exact = all(item[1] for item in results)
+    took_ms = sum(item[2] for item in results)
     if total >= LARGE_EXPORT_CRITICAL_RECORDS:
         warning_level = "critical"
         warning = (
@@ -1320,7 +1343,8 @@ async def query_count(payload: QueryInput) -> dict[str, Any]:
         "ok": True,
         "total": total,
         "total_exact": exact,
-        "took_ms": response.get("took"),
+        "took_ms": took_ms,
+        "count_partitions": len(partitions),
         "warning_level": warning_level,
         "warning": warning,
         "warning_threshold": LARGE_EXPORT_WARNING_RECORDS,
