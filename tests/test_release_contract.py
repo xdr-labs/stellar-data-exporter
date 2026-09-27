@@ -63,3 +63,29 @@ def test_hash_release_artifacts_writes_and_verifies_sha256(tmp_path):
     lines = sums.read_text().splitlines()
     assert len(lines) == 2
     assert all(str(dist) in line for line in lines)
+
+
+def test_browser_distinguishes_exporter_outage_and_retries_safe_requests():
+    javascript = read("app/static/app.js")
+
+    assert "const TRANSIENT_EXPORTER_STATUSES = new Set([502, 503, 504]);" in javascript
+    assert "Exporter backend is temporarily unavailable" in javascript
+    assert "reverse proxy is restarting or unreachable" in javascript
+    assert "const retryTransient = retryTransientOption ?? method === \"GET\";" in javascript
+    assert "Connection failed. Check the host address, network path, and TLS settings." not in javascript
+
+    count_start = javascript.index('const countResult = await api("/api/query/count"')
+    count_block = javascript[count_start:count_start + 260]
+    assert "retryTransient: true" in count_block
+
+    preview_start = javascript.index('const result = await api("/api/query/preview"')
+    preview_block = javascript[preview_start:preview_start + 260]
+    assert "retryTransient: true" in preview_block
+
+    connection_start = javascript.index('const result = await api("/api/connection/test"')
+    connection_block = javascript[connection_start:connection_start + 320]
+    assert "retryTransient: true" in connection_block
+
+    create_start = javascript.index('const result = await api("/api/export/jobs"')
+    create_block = javascript[create_start:create_start + 260]
+    assert "retryTransient: true" not in create_block
