@@ -124,6 +124,7 @@ class ExportJob:
     files_completed: int = 0
     query_count: int = 0
     retry_count: int = 0
+    adaptive_split_count: int = 0
     duplicates_skipped: int = 0
     current_slice_start: str | None = None
     current_slice_end: str | None = None
@@ -510,6 +511,10 @@ def build_export_source(payload: ExportInput, job: ExportJob | None = None):
         if job is not None:
             job.duplicates_skipped += 1
 
+    def on_adaptive_split() -> None:
+        if job is not None:
+            job.adaptive_split_count += 1
+
     engine = ExportEngine(
         client,
         index=plan_indices(payload.sources, start=payload.start, end=payload.end).target,
@@ -524,6 +529,7 @@ def build_export_source(payload: ExportInput, job: ExportJob | None = None):
         on_slice=on_slice if job is not None else None,
         on_record=on_record if job is not None else None,
         on_duplicate=on_duplicate if job is not None else None,
+        on_adaptive_split=on_adaptive_split if job is not None else None,
         cancel_check=(lambda: job.cancel_requested) if job is not None else None,
     )
 
@@ -619,6 +625,7 @@ def job_status_payload(job_id: str, job: ExportJob) -> dict[str, Any]:
         "current_slice_end": job.current_slice_end,
         "query_count": job.query_count,
         "retry_count": job.retry_count,
+        "adaptive_split_count": job.adaptive_split_count,
         "duplicates_skipped": job.duplicates_skipped,
         "elapsed_seconds": elapsed,
         "rate_records_per_second": rate,
@@ -649,6 +656,7 @@ def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
         "current_slice_end": record.get("current_slice_end"),
         "query_count": int(record.get("query_count") or 0),
         "retry_count": int(record.get("retry_count") or 0),
+        "adaptive_split_count": 0,
         "duplicates_skipped": int(record.get("duplicates_skipped") or 0),
         "elapsed_seconds": elapsed,
         "rate_records_per_second": (exported / elapsed) if elapsed > 0 else 0.0,

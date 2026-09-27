@@ -316,3 +316,31 @@ async def test_search_exhausted_read_timeouts_report_transport_reason(monkeypatc
     assert "read timeout (ReadTimeout)" in message
     assert "upstream response stalled" not in message
     assert calls == {"search": 2, "retry": 1}
+
+
+@pytest.mark.asyncio
+async def test_document_read_timeout_is_returned_for_adaptive_split_without_retries():
+    calls = {"search": 0, "retry": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/api/v1/access_token":
+            return httpx.Response(200, json={"access_token": "jwt-1"})
+        if request.url.path.endswith("/_search"):
+            calls["search"] += 1
+            raise httpx.ReadTimeout("slow document response", request=request)
+        raise AssertionError(f"Unexpected URL: {request.url}")
+
+    client = StellarClient(
+        "https://stellar.example.test",
+        "admin@example.test",
+        "refresh-token",
+        transport=httpx.MockTransport(handler),
+        tenant_id="tenant-1",
+        on_retry=lambda count: calls.__setitem__("retry", calls["retry"] + count),
+    )
+
+    with pytest.raises(stellar_module.StellarReadTimeoutError) as excinfo:
+        await client.search("aella-ser-*", {"size": 250, "query": {"match_all": {}}})
+
+    assert "smaller adaptive time slices" in str(excinfo.value)
+    assert calls == {"search": 1, "retry": 0}

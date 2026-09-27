@@ -123,3 +123,15 @@ def test_export_without_preview_uses_count_preflight_result():
     assert "updateSummary();" in run_block
     assert "${matchedTotal.toLocaleString()} records. Creating export job" in run_block
     assert "${state.previewTotal.toLocaleString()} records. Creating export job" not in run_block
+
+
+def test_adaptive_export_defaults_and_progress_are_visible():
+    javascript = read("app/static/app.js")
+    html = read("app/static/index.html")
+
+    assert 'id="targetRecords" type="number" min="100" max="50000" value="250"' in html
+    assert '$("targetRecords").value = "250";' in javascript
+    assert 'target_records_per_slice: Number($("targetRecords").value || 250)' in javascript
+    assert "Enabled · count + slow-response bisect" in javascript
+    assert 'id="progressAdaptiveSplits">0</strong>' in html
+    assert 'status.adaptive_split_count || 0' in javascript
