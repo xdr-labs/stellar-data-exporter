@@ -109,3 +109,17 @@ def test_forget_session_clears_browser_memory_and_visible_connection_values():
 
     assert ">Forget session</button>" in html
     assert "clears Host, credential, tenant, and connection results from this page" in html
+
+
+def test_export_without_preview_uses_count_preflight_result():
+    javascript = read("app/static/app.js")
+
+    run_start = javascript.index("async function runExport()")
+    run_end = javascript.index("function initialize()", run_start)
+    run_block = javascript[run_start:run_end]
+
+    assert "const matchedTotal = Number(countResult.total || 0);" in run_block
+    assert "state.previewTotal = matchedTotal;" in run_block
+    assert "updateSummary();" in run_block
+    assert "${matchedTotal.toLocaleString()} records. Creating export job" in run_block
+    assert "${state.previewTotal.toLocaleString()} records. Creating export job" not in run_block
