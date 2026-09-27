@@ -89,3 +89,23 @@ def test_browser_distinguishes_exporter_outage_and_retries_safe_requests():
     create_start = javascript.index('const result = await api("/api/export/jobs"')
     create_block = javascript[create_start:create_start + 260]
     assert "retryTransient: true" not in create_block
+
+
+def test_forget_session_clears_browser_memory_and_visible_connection_values():
+    javascript = read("app/static/app.js")
+    html = read("app/static/index.html")
+
+    clear_start = javascript.index("function clearSavedConnection()")
+    clear_end = javascript.index("function loadSavedConnection()", clear_start)
+    clear_block = javascript[clear_start:clear_end]
+
+    assert 'sessionStorage.removeItem(CONNECTION_SESSION_STORAGE_KEY);' in clear_block
+    assert '$("host").value = "";' in clear_block
+    assert '$("email").value = "";' in clear_block
+    assert '$("token").value = "";' in clear_block
+    assert 'invalidateTenantSelection("Test connection to load tenants");' in clear_block
+    assert '"Session forgotten. Host, credential, tenant, and connection results were cleared from this page."' in clear_block
+    assert "Current form values are unchanged." not in javascript
+
+    assert ">Forget session</button>" in html
+    assert "clears Host, credential, tenant, and connection results from this page" in html
