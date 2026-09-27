@@ -33,6 +33,56 @@ class StellarConnectionError(StellarAPIError):
     pass
 
 
+def transport_failure_summary(exc: BaseException | None, *, operation: str) -> str:
+    current = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, httpx.ReadTimeout):
+            return (
+                f"Last failure: Stellar Cyber accepted the connection but did not return "
+                f"the {operation} response before the read timeout (ReadTimeout)."
+            )
+        if isinstance(current, httpx.ConnectTimeout):
+            return (
+                f"Last failure: the connection to Stellar Cyber was not established "
+                f"before the connect timeout (ConnectTimeout)."
+            )
+        if isinstance(current, httpx.PoolTimeout):
+            return (
+                f"Last failure: the Exporter could not acquire an HTTP connection in time "
+                f"(PoolTimeout)."
+            )
+        if isinstance(current, httpx.WriteTimeout):
+            return (
+                f"Last failure: the request to Stellar Cyber could not be sent in time "
+                f"(WriteTimeout)."
+            )
+        if isinstance(current, httpx.RemoteProtocolError):
+            return (
+                f"Last failure: Stellar Cyber or an intermediate proxy closed the connection "
+                f"or returned an invalid HTTP response (RemoteProtocolError)."
+            )
+        if isinstance(current, httpx.ReadError):
+            return (
+                f"Last failure: the connection dropped while the Exporter was reading the "
+                f"{operation} response (ReadError)."
+            )
+        if isinstance(current, httpx.ConnectError):
+            return (
+                f"Last failure: the TCP/TLS connection to Stellar Cyber could not be "
+                f"established (ConnectError)."
+            )
+        if isinstance(current, httpx.RequestError):
+            return (
+                f"Last failure: HTTP transport failed while performing the {operation} "
+                f"({type(current).__name__})."
+            )
+        current = current.__cause__ or current.__context__
+
+    return f"Last failure: the Stellar Cyber {operation} transport was unavailable."
+
+
 class StellarClient:
     def __init__(
         self,
@@ -231,7 +281,7 @@ class StellarClient:
                     if attempt + 1 >= QUERY_RETRY_ATTEMPTS:
                         raise StellarConnectionError(
                             "Cannot reach the Stellar Cyber tenant API after automatic retries. "
-                            "Check the host, network path, and TLS settings."
+                            + transport_failure_summary(exc, operation="tenant API")
                         ) from exc
                     if self.on_retry:
                         self.on_retry(1)
@@ -330,7 +380,7 @@ class StellarClient:
                     if attempt + 1 >= QUERY_RETRY_ATTEMPTS:
                         raise StellarConnectionError(
                             "Connection to Stellar Cyber remained unavailable after automatic retries. "
-                            "Check the host, network path, and TLS settings."
+                            + transport_failure_summary(exc, operation="query")
                         ) from exc
                     if self.on_retry:
                         self.on_retry(1)

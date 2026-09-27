@@ -282,3 +282,37 @@ async def test_search_retries_transient_http_status(monkeypatch):
 
     assert response["hits"]["total"]["value"] == 0
     assert calls == {"search": 2, "retry": 1}
+
+
+@pytest.mark.asyncio
+async def test_search_exhausted_read_timeouts_report_transport_reason(monkeypatch):
+    calls = {"search": 0, "retry": 0}
+    monkeypatch.setattr(stellar_module, "QUERY_RETRY_ATTEMPTS", 2)
+    monkeypatch.setattr(stellar_module, "QUERY_RETRY_BASE_DELAY_SECONDS", 0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/api/v1/access_token":
+            return httpx.Response(200, json={"access_token": "jwt-1"})
+        if request.url.path.endswith("/_search"):
+            calls["search"] += 1
+            raise httpx.ReadTimeout("upstream response stalled", request=request)
+        raise AssertionError(f"Unexpected URL: {request.url}")
+
+    client = StellarClient(
+        "https://stellar.example.test",
+        "admin@example.test",
+        "refresh-token",
+        transport=httpx.MockTransport(handler),
+        tenant_id="tenant-1",
+        on_retry=lambda count: calls.__setitem__("retry", calls["retry"] + count),
+    )
+
+    with pytest.raises(stellar_module.StellarConnectionError) as excinfo:
+        await client.search("aella-ser-*", {"query": {"match_all": {}}})
+
+    message = str(excinfo.value)
+    assert "after automatic retries" in message
+    assert "accepted the connection" in message
+    assert "read timeout (ReadTimeout)" in message
+    assert "upstream response stalled" not in message
+    assert calls == {"search": 2, "retry": 1}
