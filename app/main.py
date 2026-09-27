@@ -8,7 +8,10 @@ import logging
 import os
 import re
 import secrets
+import subprocess
+import sys
 import tempfile
+import threading
 import time
 import uuid
 import zipfile
@@ -74,6 +77,8 @@ from .stellar import (
 PACKAGE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = PACKAGE_DIR / "static"
 STATE_DIR = default_state_dir(PACKAGE_DIR)
+DOWNLOAD_DIR = ensure_private_directory(STATE_DIR / "downloads")
+WORKER_LOG_PATH = STATE_DIR / "export-workers.log"
 DOWNLOAD_JOB_TTL_SECONDS = 600
 HISTORY_JOB_TTL_SECONDS = 3600
 EXPORT_PARTITION_MAX_DURATION = timedelta(days=1)
@@ -106,7 +111,6 @@ LARGE_EXPORT_CRITICAL_RECORDS = max(
     int(os.environ.get("STELLAR_EXPORTER_LARGE_EXPORT_CRITICAL_RECORDS", "1000000")),
 )
 JOB_STORE = JobStore(JOB_DB_PATH)
-JOB_STORE.recover_interrupted()
 SCHEDULE_STORE = ScheduleStore(SCHEDULE_DB_PATH)
 SCHEDULE_CIPHER = ScheduleCipher.from_environment(SCHEDULE_KEY_PATH)
 LOGGER = logging.getLogger("stellar-data-exporter")
@@ -134,6 +138,8 @@ class ExportJob:
     partition_number: int = 0
     partition_total: int = 0
     cancel_requested: bool = False
+    worker_pid: int | None = None
+    last_cancel_checked_at: float = field(default=0.0, repr=False)
     result: str | None = None
     error: str | None = None
     completed_parts: list[dict[str, Any]] = field(default_factory=list)
@@ -159,9 +165,51 @@ def remove_deprecated_shared_connection_file() -> None:
         )
 
 
+def detached_worker_alive(record: dict[str, Any]) -> bool:
+    pid = int(record.get("worker_pid") or 0)
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+
+    proc_cmdline = Path(f"/proc/{pid}/cmdline")
+    if proc_cmdline.exists():
+        try:
+            command = proc_cmdline.read_bytes().replace(b"\0", b" ").decode(
+                "utf-8",
+                errors="replace",
+            )
+        except OSError:
+            return False
+        if "app.worker_daemon" in command:
+            return True
+        return "app.job_worker" in command and record["job_id"] in command
+    return True
+
+
+def recover_orphaned_export_jobs() -> int:
+    # In worker-daemon mode, only the daemon owns worker lifecycle recovery.
+    # Restarting the Web/API process must never mutate active export jobs.
+    if configured_worker_socket() is not None:
+        return 0
+
+    stale = [
+        record["job_id"]
+        for record in JOB_STORE.list_active()
+        if not detached_worker_alive(record)
+    ]
+    return JOB_STORE.recover_interrupted(stale)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     remove_deprecated_shared_connection_file()
+    if detached_jobs_enabled():
+        recover_orphaned_export_jobs()
+    else:
+        JOB_STORE.recover_interrupted()
     loop_task = asyncio.create_task(schedule_loop())
     try:
         yield
@@ -176,10 +224,6 @@ async def lifespan(_: FastAPI):
             task.cancel()
         if active:
             await asyncio.gather(*active, return_exceptions=True)
-        for job in EXPORT_JOBS.values():
-            if job.download_path:
-                cleanup_paths([job.download_path])
-                job.download_path = None
 
 
 app = FastAPI(title="Stellar Data Exporter", version=__version__, lifespan=lifespan)
@@ -378,7 +422,15 @@ def job_store_record(job: ExportJob) -> dict[str, Any]:
         "duplicates_skipped": job.duplicates_skipped,
         "current_slice_start": job.current_slice_start,
         "current_slice_end": job.current_slice_end,
+        "current_source": job.current_source,
+        "partition_number": job.partition_number,
+        "partition_total": job.partition_total,
         "cancel_requested": job.cancel_requested,
+        "worker_pid": job.worker_pid,
+        "download_path": job.download_path,
+        "download_filename": job.download_filename,
+        "download_media_type": job.download_media_type,
+        "adaptive_split_count": job.adaptive_split_count,
         "result": job.result,
         "error": job.error,
         "metadata": job.metadata,
@@ -390,8 +442,36 @@ def persist_job(job: ExportJob, *, force: bool = False) -> None:
     now = time.time()
     if not force and now - job.last_persisted_at < 1.0:
         return
+
+    # Detached workers may receive metadata annotations (for example schedule
+    # identity) from the API process after launch. Merge those durable fields
+    # before saving so a worker progress update never erases them.
+    if job.worker_pid is not None:
+        existing = JOB_STORE.get(job.job_id)
+        if existing:
+            job.metadata = {
+                **job.metadata,
+                **dict(existing.get("metadata") or {}),
+            }
+
     JOB_STORE.save(job_store_record(job))
     job.last_persisted_at = now
+
+
+def job_cancel_requested(job: ExportJob) -> bool:
+    if job.cancel_requested:
+        return True
+    if job.worker_pid is None:
+        return False
+
+    now = time.time()
+    if now - job.last_cancel_checked_at < 0.5:
+        return False
+    job.last_cancel_checked_at = now
+    record = JOB_STORE.get(job.job_id)
+    if record and record.get("cancel_requested"):
+        job.cancel_requested = True
+    return job.cancel_requested
 
 
 def file_sha256(path: str) -> str:
@@ -455,6 +535,134 @@ def resumable_status(status: str, summary: dict[str, Any]) -> bool:
     )
 
 
+def detached_jobs_enabled() -> bool:
+    value = os.environ.get("STELLAR_EXPORTER_DETACHED_JOBS", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def configured_worker_socket() -> Path | None:
+    value = os.environ.get("STELLAR_EXPORTER_WORKER_SOCKET", "").strip()
+    return Path(value) if value else None
+
+
+async def submit_to_worker_daemon(
+    job: ExportJob,
+    payload: ExportInput,
+    socket_path: Path,
+) -> int:
+    reader: asyncio.StreamReader | None = None
+    writer: asyncio.StreamWriter | None = None
+    last_error: Exception | None = None
+
+    for attempt in range(10):
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(str(socket_path)),
+                timeout=2.0,
+            )
+            break
+        except (OSError, asyncio.TimeoutError) as exc:
+            last_error = exc
+            if attempt + 1 >= 10:
+                raise RuntimeError(
+                    f"Export worker daemon is unavailable at {socket_path}"
+                ) from exc
+            await asyncio.sleep(0.1 * (attempt + 1))
+
+    if reader is None or writer is None:
+        raise RuntimeError("Export worker daemon connection failed") from last_error
+
+    request = {
+        "job_id": job.job_id,
+        "payload": payload.model_dump(mode="json"),
+    }
+    writer.write(
+        json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
+    )
+    try:
+        await writer.drain()
+        response_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+    if not response_line:
+        raise RuntimeError(
+            "Export worker daemon closed the request without acknowledgement"
+        )
+
+    response = json.loads(response_line)
+    if not response.get("accepted"):
+        raise RuntimeError(
+            str(response.get("error") or "Export worker daemon rejected the job")
+        )
+
+    worker_pid = int(response.get("worker_pid") or 0)
+    if worker_pid <= 0:
+        raise RuntimeError("Export worker daemon returned an invalid PID")
+    job.worker_pid = worker_pid
+    persist_job(job, force=True)
+    return worker_pid
+
+
+async def dispatch_export_worker(job: ExportJob, payload: ExportInput) -> int:
+    socket_path = configured_worker_socket()
+    if socket_path is not None:
+        return await submit_to_worker_daemon(job, payload, socket_path)
+    return launch_detached_worker(job, payload)
+
+
+def _reap_detached_worker(process: subprocess.Popen, job_id: str) -> None:
+    process.wait()
+    record = JOB_STORE.get(job_id)
+    if record and record.get("status") in {"pending", "running"}:
+        JOB_STORE.recover_interrupted([job_id])
+
+
+def launch_detached_worker(job: ExportJob, payload: ExportInput) -> int:
+    ensure_private_directory(WORKER_LOG_PATH.parent)
+    log_handle = open(WORKER_LOG_PATH, "ab", buffering=0)
+    process: subprocess.Popen | None = None
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "app.job_worker", job.job_id],
+            cwd=str(PACKAGE_DIR.parent),
+            stdin=subprocess.PIPE,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+        if process.stdin is None:
+            raise RuntimeError("Could not open export worker input pipe")
+
+        # Persist the PID before releasing the one-shot credential payload. The
+        # worker blocks on stdin until this point, so API restart recovery can
+        # already distinguish a live detached worker from an orphaned job.
+        job.worker_pid = process.pid
+        persist_job(job, force=True)
+
+        try:
+            process.stdin.write(payload.model_dump_json().encode("utf-8"))
+            process.stdin.flush()
+        finally:
+            process.stdin.close()
+    except Exception:
+        if process is not None and process.poll() is None:
+            process.terminate()
+        raise
+    finally:
+        log_handle.close()
+
+    threading.Thread(
+        target=_reap_detached_worker,
+        args=(process, job.job_id),
+        daemon=True,
+        name=f"export-worker-reaper-{job.job_id[:8]}",
+    ).start()
+    return process.pid
+
+
 def cleanup_jobs() -> None:
     now = time.time()
     for job_id, job in list(EXPORT_JOBS.items()):
@@ -470,6 +678,28 @@ def cleanup_jobs() -> None:
             if job.download_path and os.path.exists(job.download_path):
                 os.unlink(job.download_path)
             EXPORT_JOBS.pop(job_id, None)
+
+    # Detached browser-download artifacts are durable across API restarts, but
+    # only for the same history TTL. Clear the persisted path after expiry so
+    # large CSV/JSON exports do not accumulate forever on the server.
+    for record in JOB_STORE.list(200):
+        if record["status"] not in {"completed", "failed", "cancelled", "expired", "interrupted"}:
+            continue
+        terminal_anchor = record.get("completed_at") or record["created_at"]
+        if now - terminal_anchor <= HISTORY_JOB_TTL_SECONDS:
+            continue
+        path = record.get("download_path")
+        if not path:
+            continue
+        if os.path.exists(path):
+            try:
+                os.unlink(path)
+            except OSError:
+                continue
+        record["download_path"] = None
+        record["download_filename"] = None
+        record["download_media_type"] = None
+        JOB_STORE.save(record)
 
 
 def safe_filename(name: str | None, fmt: str, compressed: bool) -> str:
@@ -506,6 +736,7 @@ def build_export_source(payload: ExportInput, job: ExportJob | None = None):
     def add_retry(count: int) -> None:
         if job is not None:
             job.retry_count += count
+            persist_job(job)
 
     client = client_for(payload, on_retry=add_retry if job is not None else None)
     raw_query = compile_user_query(
@@ -519,23 +750,28 @@ def build_export_source(payload: ExportInput, job: ExportJob | None = None):
     def on_query() -> None:
         if job is not None:
             job.query_count += 1
+            persist_job(job)
 
     def on_slice(start, end) -> None:
         if job is not None:
             job.current_slice_start = start.isoformat()
             job.current_slice_end = end.isoformat()
+            persist_job(job)
 
     def on_record() -> None:
         if job is not None:
             job.records_exported += 1
+            persist_job(job)
 
     def on_duplicate() -> None:
         if job is not None:
             job.duplicates_skipped += 1
+            persist_job(job)
 
     def on_adaptive_split() -> None:
         if job is not None:
             job.adaptive_split_count += 1
+            persist_job(job)
 
     async def partitioned_records():
         emitted = 0
@@ -549,6 +785,7 @@ def build_export_source(payload: ExportInput, job: ExportJob | None = None):
                     job.current_source = source_labels([source])[0]
                     job.partition_number = number
                     job.partition_total = total
+                    persist_job(job)
 
                 remaining = (
                     None
@@ -574,7 +811,7 @@ def build_export_source(payload: ExportInput, job: ExportJob | None = None):
                     on_record=on_record if job is not None else None,
                     on_duplicate=on_duplicate if job is not None else None,
                     on_adaptive_split=on_adaptive_split if job is not None else None,
-                    cancel_check=(lambda: job.cancel_requested) if job is not None else None,
+                    cancel_check=(lambda: job_cancel_requested(job)) if job is not None else None,
                 )
                 async for record in engine.iter_documents():
                     emitted += 1
@@ -651,6 +888,7 @@ def mark_job_terminal(job: ExportJob, status: str, error: str | None = None) -> 
     job.status = status
     job.error = error
     job.completed_at = time.time()
+    job.worker_pid = None
     persist_job(job, force=True)
 
 
@@ -704,12 +942,12 @@ def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
         "files_completed": int(record.get("files_completed") or 0),
         "current_slice_start": record.get("current_slice_start"),
         "current_slice_end": record.get("current_slice_end"),
-        "current_source": None,
-        "partition_number": 0,
-        "partition_total": 0,
+        "current_source": record.get("current_source"),
+        "partition_number": int(record.get("partition_number") or 0),
+        "partition_total": int(record.get("partition_total") or 0),
         "query_count": int(record.get("query_count") or 0),
         "retry_count": int(record.get("retry_count") or 0),
-        "adaptive_split_count": 0,
+        "adaptive_split_count": int(record.get("adaptive_split_count") or 0),
         "duplicates_skipped": int(record.get("duplicates_skipped") or 0),
         "elapsed_seconds": elapsed,
         "rate_records_per_second": (exported / elapsed) if elapsed > 0 else 0.0,
@@ -721,10 +959,16 @@ def stored_job_status_payload(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def write_stream_to_temp_file(stream, *, suffix: str = "") -> tuple[str, int]:
+async def write_stream_to_temp_file(
+    stream,
+    *,
+    suffix: str = "",
+    prefix: str = "stellar-export-ready-",
+) -> tuple[str, int]:
     handle = tempfile.NamedTemporaryFile(
-        prefix="stellar-export-ready-",
+        prefix=prefix,
         suffix=suffix,
+        dir=DOWNLOAD_DIR,
         delete=False,
     )
     path = handle.name
@@ -756,8 +1000,12 @@ async def run_download_job(job_id: str) -> None:
         if payload.max_file_size_bytes is None:
             stream, content_type, filename = build_output(payload, job)
             suffix = "".join(Path(filename).suffixes)
-            path, size = await write_stream_to_temp_file(stream, suffix=suffix)
-            if job.cancel_requested:
+            path, size = await write_stream_to_temp_file(
+                stream,
+                suffix=suffix,
+                prefix=f"{job.job_id}-",
+            )
+            if job_cancel_requested(job):
                 raise ExportCancelled("Export cancelled")
             job.download_path = path
             job.download_filename = filename
@@ -771,7 +1019,7 @@ async def run_download_job(job_id: str) -> None:
                 completed_parts.append(part)
                 temporary_paths.append(part.path)
                 job.files_completed += 1
-                if job.cancel_requested:
+                if job_cancel_requested(job):
                     raise ExportCancelled("Export cancelled")
 
             if len(completed_parts) == 1:
@@ -782,8 +1030,9 @@ async def run_download_job(job_id: str) -> None:
                 job.download_media_type = "application/gzip" if payload.compress else content_type
             else:
                 archive = tempfile.NamedTemporaryFile(
-                    prefix="stellar-export-ready-",
+                    prefix=f"{job.job_id}-",
                     suffix=".zip",
+                    dir=DOWNLOAD_DIR,
                     delete=False,
                 )
                 archive_path = archive.name
@@ -810,7 +1059,7 @@ async def run_download_job(job_id: str) -> None:
             if job.download_path:
                 job.bytes_sent = os.path.getsize(job.download_path)
 
-        if job.cancel_requested:
+        if job_cancel_requested(job):
             raise ExportCancelled("Export cancelled")
         job.result = job.download_filename
         mark_job_terminal(job, "completed")
@@ -841,9 +1090,10 @@ async def run_destination_job(job_id: str) -> None:
 
     def add_bytes(count: int) -> None:
         job.bytes_sent += count
+        persist_job(job)
 
     async def upload_one(filename: str, stream, content_type: str) -> str:
-        if job.cancel_requested:
+        if job_cancel_requested(job):
             raise ExportCancelled("Export cancelled")
         if isinstance(payload.destination, S3Destination):
             return await upload_s3(
@@ -853,7 +1103,7 @@ async def run_destination_job(job_id: str) -> None:
                 content_type=content_type,
                 content_encoding="gzip" if payload.compress else None,
                 on_bytes=add_bytes,
-                cancel_check=lambda: job.cancel_requested,
+                cancel_check=lambda: job_cancel_requested(job),
             )
         if isinstance(payload.destination, SFTPDestination):
             return await upload_sftp(
@@ -861,7 +1111,7 @@ async def run_destination_job(job_id: str) -> None:
                 filename,
                 stream,
                 on_bytes=add_bytes,
-                cancel_check=lambda: job.cancel_requested,
+                cancel_check=lambda: job_cancel_requested(job),
             )
         raise RuntimeError("Unsupported background destination")
 
@@ -931,7 +1181,7 @@ async def run_destination_job(job_id: str) -> None:
                 job.result = results[0]
             elif results:
                 job.result = f"{len(results)} files: {results[0]} ... {results[-1]}"
-        if job.cancel_requested:
+        if job_cancel_requested(job):
             raise ExportCancelled("Export cancelled")
         mark_job_terminal(job, "completed")
     except (ExportCancelled, asyncio.CancelledError):
@@ -1005,6 +1255,41 @@ def schedule_error_text(exc: Exception) -> str:
     return str(exc)
 
 
+def annotate_job_metadata(job_id: str, **updates: Any) -> None:
+    job = EXPORT_JOBS.get(job_id)
+    if job is not None:
+        job.metadata.update(updates)
+        persist_job(job, force=True)
+        return
+
+    record = JOB_STORE.get(job_id)
+    if record is None:
+        raise RuntimeError(f"Export job disappeared: {job_id}")
+    record["metadata"] = {
+        **dict(record.get("metadata") or {}),
+        **updates,
+    }
+    JOB_STORE.save(record)
+
+
+async def wait_for_export_terminal(job_id: str) -> tuple[str, str | None]:
+    if not detached_jobs_enabled():
+        job = EXPORT_JOBS.get(job_id)
+        if job is None:
+            raise RuntimeError(f"Export job disappeared: {job_id}")
+        if job.task is not None:
+            await job.task
+        return job.status, job.error
+
+    while True:
+        record = JOB_STORE.get(job_id)
+        if record is None:
+            raise RuntimeError(f"Export job disappeared: {job_id}")
+        if record["status"] not in {"pending", "running"}:
+            return record["status"], record.get("error")
+        await asyncio.sleep(0.5)
+
+
 async def execute_schedule(
     schedule_id: str,
     *,
@@ -1037,20 +1322,19 @@ async def execute_schedule(
             )
             try:
                 resumed = await resume_export_job(last_job_id, payload)
-                job = EXPORT_JOBS[last_job_id]
-                job.metadata["schedule_id"] = schedule_id
-                job.metadata["schedule_name"] = schedule["name"]
-                persist_job(job, force=True)
-                if job.task is not None:
-                    await job.task
-                status = job.status
+                annotate_job_metadata(
+                    last_job_id,
+                    schedule_id=schedule_id,
+                    schedule_name=schedule["name"],
+                )
+                status, job_error = await wait_for_export_terminal(last_job_id)
                 success_end = payload.end.isoformat() if status == "completed" else None
                 SCHEDULE_STORE.record_result(
                     schedule_id,
                     job_id=last_job_id,
                     status=status,
                     last_success_end=success_end,
-                    error=job.error,
+                    error=job_error,
                 )
                 return {
                     "schedule_id": schedule_id,
@@ -1099,20 +1383,19 @@ async def execute_schedule(
     try:
         created = await create_export_job(payload)
         job_id = created["job_id"]
-        job = EXPORT_JOBS[job_id]
-        job.metadata["schedule_id"] = schedule_id
-        job.metadata["schedule_name"] = schedule["name"]
-        persist_job(job, force=True)
-        if job.task is not None:
-            await job.task
-        status = job.status
+        annotate_job_metadata(
+            job_id,
+            schedule_id=schedule_id,
+            schedule_name=schedule["name"],
+        )
+        status, job_error = await wait_for_export_terminal(job_id)
         success_end = run_end.isoformat() if status == "completed" else None
         SCHEDULE_STORE.record_result(
             schedule_id,
             job_id=job_id,
             status=status,
             last_success_end=success_end,
-            error=job.error,
+            error=job_error,
         )
         return {
             "schedule_id": schedule_id,
@@ -1517,19 +1800,31 @@ async def create_export_job(payload: ExportInput) -> dict[str, str]:
             )
 
     job_id = uuid.uuid4().hex
+    detached = detached_jobs_enabled()
     job = ExportJob(
         job_id=job_id,
         created_at=time.time(),
-        payload=payload,
+        payload=None if detached else payload,
         metadata=sanitized_export_metadata(payload),
     )
-    EXPORT_JOBS[job_id] = job
     persist_job(job, force=True)
     status_url = f"/api/export/jobs/{job_id}"
     cancel_url = f"/api/export/jobs/{job_id}/cancel"
 
+    if detached:
+        try:
+            await dispatch_export_worker(job, payload)
+        except Exception as exc:
+            mark_job_terminal(job, "failed", f"Could not start export worker: {exc}"[:2000])
+            raise HTTPException(status_code=503, detail=job.error) from exc
+    else:
+        EXPORT_JOBS[job_id] = job
+        if isinstance(payload.destination, DownloadDestination):
+            job.task = asyncio.create_task(run_download_job(job_id))
+        else:
+            job.task = asyncio.create_task(run_destination_job(job_id))
+
     if isinstance(payload.destination, DownloadDestination):
-        job.task = asyncio.create_task(run_download_job(job_id))
         return {
             "job_id": job_id,
             "mode": "download",
@@ -1538,7 +1833,6 @@ async def create_export_job(payload: ExportInput) -> dict[str, str]:
             "cancel_url": cancel_url,
         }
 
-    job.task = asyncio.create_task(run_destination_job(job_id))
     return {
         "job_id": job_id,
         "mode": "background",
@@ -1575,17 +1869,28 @@ async def resume_export_job(job_id: str, payload: ExportInput) -> dict[str, Any]
 
     validate_resume_payload(record, payload)
     checkpoints = list(record.get("completed_parts") or [])
+    detached = detached_jobs_enabled()
+    JOB_STORE.clear_cancel_requested(job_id)
     job = ExportJob(
         job_id=job_id,
         created_at=record["created_at"],
-        payload=payload,
+        payload=None if detached else payload,
         metadata=sanitized_export_metadata(payload),
         bytes_sent=sum(int(part.get("size_bytes") or 0) for part in checkpoints),
         completed_parts=checkpoints,
     )
-    EXPORT_JOBS[job_id] = job
     persist_job(job, force=True)
-    job.task = asyncio.create_task(run_destination_job(job_id))
+
+    if detached:
+        try:
+            await dispatch_export_worker(job, payload)
+        except Exception as exc:
+            mark_job_terminal(job, "failed", f"Could not start export worker: {exc}"[:2000])
+            raise HTTPException(status_code=503, detail=job.error) from exc
+    else:
+        EXPORT_JOBS[job_id] = job
+        job.task = asyncio.create_task(run_destination_job(job_id))
+
     return {
         "job_id": job_id,
         "mode": "background",
@@ -1612,17 +1917,28 @@ async def export_job_status(job_id: str) -> dict[str, Any]:
 async def cancel_export_job(job_id: str) -> dict[str, Any]:
     cleanup_jobs()
     job = EXPORT_JOBS.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Export job not found or expired")
-    if job.status in {"completed", "failed", "cancelled", "expired", "interrupted"}:
+    if job is not None:
+        if job.status in {"completed", "failed", "cancelled", "expired", "interrupted"}:
+            return job_status_payload(job_id, job)
+
+        job.cancel_requested = True
+        if job.status == "pending":
+            job.payload = None
+            job.task = None
+            mark_job_terminal(job, "cancelled")
+        else:
+            persist_job(job, force=True)
         return job_status_payload(job_id, job)
 
-    job.cancel_requested = True
-    if job.status == "pending":
-        job.payload = None
-        job.task = None
-        mark_job_terminal(job, "cancelled")
-    return job_status_payload(job_id, job)
+    record = JOB_STORE.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Export job not found or expired")
+    if record["status"] in {"completed", "failed", "cancelled", "expired", "interrupted"}:
+        return stored_job_status_payload(record)
+
+    JOB_STORE.request_cancel(job_id)
+    updated = JOB_STORE.get(job_id)
+    return stored_job_status_payload(updated)
 
 
 def cleanup_paths(paths: list[str]) -> None:
@@ -1635,21 +1951,37 @@ def cleanup_paths(paths: list[str]) -> None:
 async def download_export(job_id: str):
     cleanup_jobs()
     job = EXPORT_JOBS.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Export job not found or expired")
-    if job.metadata.get("destination_type") != "download":
+    if job is not None:
+        metadata = job.metadata
+        status = job.status
+        error = job.error
+        path = job.download_path
+        filename = job.download_filename
+        media_type = job.download_media_type
+    else:
+        record = JOB_STORE.get(job_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Export job not found or expired")
+        metadata = record.get("metadata") or {}
+        status = record["status"]
+        error = record.get("error")
+        path = record.get("download_path")
+        filename = record.get("download_filename")
+        media_type = record.get("download_media_type")
+
+    if metadata.get("destination_type") != "download":
         raise HTTPException(status_code=400, detail="This job is not a browser download")
-    if job.status == "cancelled":
+    if status == "cancelled":
         raise HTTPException(status_code=409, detail="Export job was cancelled")
-    if job.status == "failed":
-        raise HTTPException(status_code=409, detail=job.error or "Export job failed")
-    if job.status != "completed":
+    if status in {"failed", "interrupted"}:
+        raise HTTPException(status_code=409, detail=error or "Export job failed")
+    if status != "completed":
         raise HTTPException(status_code=409, detail="Export file is still being prepared")
-    if not job.download_path or not os.path.exists(job.download_path):
+    if not path or not os.path.exists(path):
         raise HTTPException(status_code=410, detail="Prepared export file is no longer available")
 
     return FileResponse(
-        job.download_path,
-        media_type=job.download_media_type or "application/octet-stream",
-        filename=job.download_filename or "stellar-export",
+        path,
+        media_type=media_type or "application/octet-stream",
+        filename=filename or "stellar-export",
     )

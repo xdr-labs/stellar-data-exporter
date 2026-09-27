@@ -175,9 +175,11 @@ Before any interactive export job is created, the exporter runs a count-only pre
 
 It can also:
 
+- run interactive export work in a detached worker process so restarting the Web/API process does not abort an in-progress export
+- keep completed browser-download artifacts on disk for the history TTL so they remain downloadable after an API restart
 - automatically retry transient Stellar Cyber connection resets, timeouts, HTTP 429, and HTTP 5xx responses with exponential backoff
-- show live records/bytes/query/retry progress
-- cancel active exports
+- show live records/bytes/query/retry progress from SQLite-backed worker state
+- cancel active detached or inline exports
 - preserve sanitized job history
 - resume supported remote exports from verified split-part checkpoints
 - suppress duplicates only when Stellar/Elasticsearch provides stable document identity
@@ -189,7 +191,8 @@ It can also:
 - The development login defaults to `stellar` / `stellar`; override it with `STELLAR_EXPORTER_UI_USERNAME` and `STELLAR_EXPORTER_UI_PASSWORD` before production exposure.
 - Stellar Cyber credentials are used only after the user selects exactly one accessible tenant; Preview, count, export, resume, and schedules remain tenant-scoped.
 - Interactive Stellar Cyber credentials are never stored as a shared server-side connection. **Remember this session** stores Host/Auth/Credential/TLS/Tenant only in the current browser tab's session storage; it survives refresh but is not shared with other browsers/devices and disappears when that browser session ends.
-- **Clear session** removes that browser-session copy without changing values already loaded in the current form.
+- **Forget session** removes the browser-session copy and clears the visible Host, credential, tenant, and connection results from the page.
+- Interactive export credentials are handed to the detached worker through a one-shot stdin pipe. They are not stored in SQLite job history and are not placed on the worker command line.
 - Credentials are excluded from browser-saved export profiles and persistent job history.
 - TLS verification is enabled by default.
 - Scheduled remote exports require encrypted credential storage; provide a production master key when using this feature.

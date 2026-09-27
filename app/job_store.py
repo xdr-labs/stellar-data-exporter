@@ -42,10 +42,18 @@ class JobStore:
                     files_completed INTEGER NOT NULL DEFAULT 0,
                     query_count INTEGER NOT NULL DEFAULT 0,
                     retry_count INTEGER NOT NULL DEFAULT 0,
+                    adaptive_split_count INTEGER NOT NULL DEFAULT 0,
                     duplicates_skipped INTEGER NOT NULL DEFAULT 0,
                     current_slice_start TEXT,
                     current_slice_end TEXT,
+                    current_source TEXT,
+                    partition_number INTEGER NOT NULL DEFAULT 0,
+                    partition_total INTEGER NOT NULL DEFAULT 0,
                     cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    worker_pid INTEGER,
+                    download_path TEXT,
+                    download_filename TEXT,
+                    download_media_type TEXT,
                     result TEXT,
                     error TEXT,
                     metadata_json TEXT NOT NULL DEFAULT '{}',
@@ -67,6 +75,21 @@ class JobStore:
                     "ALTER TABLE export_jobs "
                     "ADD COLUMN duplicates_skipped INTEGER NOT NULL DEFAULT 0"
                 )
+            migrations = {
+                "adaptive_split_count": "INTEGER NOT NULL DEFAULT 0",
+                "current_source": "TEXT",
+                "partition_number": "INTEGER NOT NULL DEFAULT 0",
+                "partition_total": "INTEGER NOT NULL DEFAULT 0",
+                "worker_pid": "INTEGER",
+                "download_path": "TEXT",
+                "download_filename": "TEXT",
+                "download_media_type": "TEXT",
+            }
+            for column, definition in migrations.items():
+                if column not in columns:
+                    connection.execute(
+                        f"ALTER TABLE export_jobs ADD COLUMN {column} {definition}"
+                    )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_export_jobs_created_at "
                 "ON export_jobs(created_at DESC)"
@@ -88,8 +111,16 @@ class JobStore:
                 separators=(",", ":"),
                 sort_keys=True,
             ),
+            "adaptive_split_count": int(record.get("adaptive_split_count") or 0),
             "duplicates_skipped": int(record.get("duplicates_skipped") or 0),
+            "current_source": record.get("current_source"),
+            "partition_number": int(record.get("partition_number") or 0),
+            "partition_total": int(record.get("partition_total") or 0),
             "cancel_requested": int(bool(record.get("cancel_requested"))),
+            "worker_pid": record.get("worker_pid"),
+            "download_path": record.get("download_path"),
+            "download_filename": record.get("download_filename"),
+            "download_media_type": record.get("download_media_type"),
         }
         with self._connect() as connection:
             connection.execute(
@@ -97,13 +128,19 @@ class JobStore:
                 INSERT INTO export_jobs (
                     job_id, created_at, updated_at, status, started_at, completed_at,
                     bytes_sent, records_exported, files_completed, query_count,
-                    retry_count, duplicates_skipped, current_slice_start, current_slice_end,
-                    cancel_requested, result, error, metadata_json, checkpoint_json
+                    retry_count, adaptive_split_count, duplicates_skipped,
+                    current_slice_start, current_slice_end, current_source,
+                    partition_number, partition_total, cancel_requested, worker_pid,
+                    download_path, download_filename, download_media_type,
+                    result, error, metadata_json, checkpoint_json
                 ) VALUES (
                     :job_id, :created_at, :updated_at, :status, :started_at, :completed_at,
                     :bytes_sent, :records_exported, :files_completed, :query_count,
-                    :retry_count, :duplicates_skipped, :current_slice_start, :current_slice_end,
-                    :cancel_requested, :result, :error, :metadata_json, :checkpoint_json
+                    :retry_count, :adaptive_split_count, :duplicates_skipped,
+                    :current_slice_start, :current_slice_end, :current_source,
+                    :partition_number, :partition_total, :cancel_requested, :worker_pid,
+                    :download_path, :download_filename, :download_media_type,
+                    :result, :error, :metadata_json, :checkpoint_json
                 )
                 ON CONFLICT(job_id) DO UPDATE SET
                     updated_at=excluded.updated_at,
@@ -115,10 +152,21 @@ class JobStore:
                     files_completed=excluded.files_completed,
                     query_count=excluded.query_count,
                     retry_count=excluded.retry_count,
+                    adaptive_split_count=excluded.adaptive_split_count,
                     duplicates_skipped=excluded.duplicates_skipped,
                     current_slice_start=excluded.current_slice_start,
                     current_slice_end=excluded.current_slice_end,
-                    cancel_requested=excluded.cancel_requested,
+                    current_source=excluded.current_source,
+                    partition_number=excluded.partition_number,
+                    partition_total=excluded.partition_total,
+                    cancel_requested=CASE
+                        WHEN export_jobs.cancel_requested = 1 THEN 1
+                        ELSE excluded.cancel_requested
+                    END,
+                    worker_pid=excluded.worker_pid,
+                    download_path=excluded.download_path,
+                    download_filename=excluded.download_filename,
+                    download_media_type=excluded.download_media_type,
                     result=excluded.result,
                     error=excluded.error,
                     metadata_json=excluded.metadata_json,
@@ -143,6 +191,20 @@ class JobStore:
                 (job_id,),
             ).fetchone()
         return self._decode(row)
+
+    def set_worker_pid(self, job_id: str, pid: int | None) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE export_jobs SET worker_pid = ?, updated_at = ? WHERE job_id = ?",
+                (pid, time.time(), job_id),
+            )
+
+    def clear_cancel_requested(self, job_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE export_jobs SET cancel_requested = 0, updated_at = ? WHERE job_id = ?",
+                (time.time(), job_id),
+            )
 
     def list(self, limit: int = 50) -> list[dict[str, Any]]:
         bounded = max(1, min(int(limit), 200))
@@ -201,21 +263,54 @@ class JobStore:
                     break
         return matches
 
-    def recover_interrupted(self) -> int:
-        now = time.time()
+    def list_active(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM export_jobs "
+                "WHERE status IN ('pending', 'running') "
+                "ORDER BY created_at"
+            ).fetchall()
+        return [self._decode(row) for row in rows if row is not None]
+
+    def request_cancel(self, job_id: str) -> bool:
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE export_jobs
+                SET cancel_requested = 1,
+                    updated_at = ?
+                WHERE job_id = ?
+                  AND status IN ('pending', 'running')
+                """,
+                (time.time(), job_id),
+            )
+        return cursor.rowcount > 0
+
+    def recover_interrupted(self, job_ids: list[str] | None = None) -> int:
+        now = time.time()
+        where = "status IN ('pending', 'running')"
+        params: list[Any] = [now, now]
+        if job_ids is not None:
+            if not job_ids:
+                return 0
+            placeholders = ",".join("?" for _ in job_ids)
+            where += f" AND job_id IN ({placeholders})"
+            params.extend(job_ids)
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE export_jobs
                 SET status = 'interrupted',
                     completed_at = COALESCE(completed_at, ?),
                     updated_at = ?,
+                    worker_pid = NULL,
                     error = COALESCE(
                         error,
-                        'Exporter restarted before this job completed. Re-enter the original export settings and credentials to resume.'
+                        'Export worker stopped before this job completed, possibly after the API process restarted. Re-enter the original export settings and credentials to resume.'
                     )
-                WHERE status IN ('pending', 'running')
+                WHERE {where}
                 """,
-                (now, now),
+                params,
             )
         return cursor.rowcount
