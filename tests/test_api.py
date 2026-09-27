@@ -122,6 +122,9 @@ def test_preview_and_json_download(monkeypatch):
     assert metrics["bytes_sent"] > 0
     assert metrics["files_completed"] == 1
     assert metrics["query_count"] == 2
+    assert metrics["current_source"] == "Alerts"
+    assert metrics["partition_number"] == 1
+    assert metrics["partition_total"] == 1
     assert metrics["elapsed_seconds"] >= 0
 
 
@@ -602,3 +605,125 @@ def test_browser_download_is_only_available_after_complete_and_has_content_lengt
         assert int(downloaded.headers["content-length"]) == len(downloaded.content)
         assert len(downloaded.content) > 0
         assert downloaded.headers["content-disposition"] == 'attachment; filename="ready-only.csv"'
+
+
+def test_long_multi_source_count_keeps_one_exact_preflight_query(monkeypatch):
+    calls = []
+
+    async def count_once(self, index, body):
+        calls.append((index, body["size"], body["track_total_hits"]))
+        return {
+            "took": 42,
+            "hits": {"total": {"value": 140_000, "relation": "eq"}, "hits": []},
+        }
+
+    monkeypatch.setattr(StellarClient, "search", count_once)
+    request = payload()
+    request["sources"] = ["syslog", "traffic"]
+    request["start"] = datetime(2026, 9, 20, tzinfo=UTC).isoformat()
+    request["end"] = datetime(2026, 9, 27, tzinfo=UTC).isoformat()
+
+    response = TestClient(app).post("/api/query/count", json=request)
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 140_000
+    assert response.json()["took_ms"] == 42
+    assert calls == [("aella-syslog-*,aella-adr-*", 0, True)]
+
+
+def test_long_multi_source_export_streams_source_day_partitions(monkeypatch):
+    calls = []
+
+    async def partitioned_fetch(self, index, body):
+        bounds = body["query"]["bool"]["filter"][0]["range"]["timestamp"]
+        start = datetime.fromisoformat(bounds["gte"])
+        end = datetime.fromisoformat(bounds["lt"])
+        calls.append((index, start, end, body["size"], body["track_total_hits"]))
+        assert end - start <= timedelta(days=1)
+
+        if body["size"] == 0:
+            return {
+                "took": 1,
+                "hits": {"total": {"value": 1, "relation": "eq"}, "hits": []},
+            }
+
+        return {
+            "took": 1,
+            "hits": {
+                "total": {"value": 1, "relation": "gte"},
+                "hits": [
+                    {
+                        "_source": {
+                            "timestamp": start.isoformat(),
+                            "index": index,
+                        }
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(StellarClient, "search", partitioned_fetch)
+    request = payload()
+    request.update({
+        "sources": ["syslog", "traffic"],
+        "start": datetime(2026, 9, 20, tzinfo=UTC).isoformat(),
+        "end": datetime(2026, 9, 22, 12, tzinfo=UTC).isoformat(),
+        "format": "ndjson",
+        "filename": "partitioned",
+        "target_records_per_slice": 1000,
+    })
+
+    client = TestClient(app)
+    created = client.post("/api/export/jobs", json=request)
+    assert created.status_code == 200
+    status, download = wait_for_download(client, created)
+
+    assert status["records_exported"] == 6
+    assert status["query_count"] == 12
+    assert status["partition_number"] == 6
+    assert status["partition_total"] == 6
+    assert status["current_source"] == "Traffic"
+    assert len(calls) == 12
+
+    count_calls = [call for call in calls if call[3] == 0]
+    fetch_calls = [call for call in calls if call[3] > 0]
+    assert len(count_calls) == 6
+    assert len(fetch_calls) == 6
+    assert all(track is True for _, _, _, _, track in count_calls)
+    assert all(size == 1001 for _, _, _, size, _ in fetch_calls)
+    assert all(track is False for _, _, _, _, track in fetch_calls)
+    assert [index for index, *_ in fetch_calls] == [
+        "aella-syslog-*",
+        "aella-adr-*",
+        "aella-syslog-*",
+        "aella-adr-*",
+        "aella-syslog-*",
+        "aella-adr-*",
+    ]
+    assert len([line for line in download.text.splitlines() if line.strip()]) == 6
+
+
+def test_large_export_partitions_each_source_into_at_most_one_day_windows():
+    start = datetime(2026, 9, 20, 12, tzinfo=UTC)
+    end = start + timedelta(days=2, hours=6)
+
+    partitions = list(
+        main_app.export_partitions(
+            ["alerts", "traffic"],
+            start,
+            end,
+        )
+    )
+
+    assert len(partitions) == 6
+    assert [(number, total) for number, total, *_ in partitions] == [
+        (1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (6, 6)
+    ]
+    assert [source for _, _, source, _, _ in partitions] == [
+        "alerts", "traffic", "alerts", "traffic", "alerts", "traffic"
+    ]
+    durations = [(window_end - window_start) for *_, window_start, window_end in partitions]
+    assert durations[:4] == [timedelta(days=1)] * 4
+    assert durations[4:] == [timedelta(hours=6)] * 2
+    assert partitions[0][3] == start
+    assert partitions[-1][4] == end

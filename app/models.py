@@ -53,7 +53,7 @@ class QueryInput(BaseModel):
     query: dict[str, Any] = Field(default_factory=lambda: {"query": {"match_all": {}}})
     stellar_query: str | None = None
     preview_limit: int = Field(default=100, ge=1, le=500)
-    target_records_per_slice: int = Field(default=250, ge=100, le=50000)
+    target_records_per_slice: int = Field(default=1000, ge=100, le=50000)
     minimum_slice_ms: int = Field(default=1, ge=1, le=60000)
 
     @field_validator("end")

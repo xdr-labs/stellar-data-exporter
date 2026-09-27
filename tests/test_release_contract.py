@@ -129,12 +129,17 @@ def test_adaptive_export_defaults_and_progress_are_visible():
     javascript = read("app/static/app.js")
     html = read("app/static/index.html")
 
-    assert 'id="targetRecords" type="number" min="100" max="50000" value="250"' in html
-    assert '$("targetRecords").value = "250";' in javascript
-    assert 'target_records_per_slice: Number($("targetRecords").value || 250)' in javascript
-    assert "Enabled · count + slow-response bisect" in javascript
+    assert 'id="targetRecords" type="number" min="100" max="50000" value="1000"' in html
+    assert '$("targetRecords").value = "1000";' in javascript
+    assert 'target_records_per_slice: Number($("targetRecords").value || 1000)' in javascript
+    assert "Enabled · source/day partition + target+1 probe" in javascript
+    assert 'id="progressSource">—</strong>' in html
+    assert 'id="progressPartition">0 / 0</strong>' in html
     assert 'id="progressAdaptiveSplits">0</strong>' in html
+    assert 'status.current_source || "—"' in javascript
     assert 'status.adaptive_split_count || 0' in javascript
+    assert "Current slice" in html
+    assert "windows of at most 24 hours" in html
 
 
 def test_remembered_session_revalidates_and_restores_saved_tenant_automatically():

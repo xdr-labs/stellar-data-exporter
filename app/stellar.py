@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from collections.abc import Callable
 from datetime import datetime
@@ -14,6 +16,10 @@ import httpx
 JWT_REFRESH_AGE_SECONDS = 8 * 60
 QUERY_RETRY_ATTEMPTS = 4
 QUERY_RETRY_BASE_DELAY_SECONDS = 0.5
+QUERY_READ_TIMEOUT_SECONDS = float(os.environ.get("STELLAR_EXPORTER_QUERY_READ_TIMEOUT_SECONDS", "60"))
+EXPORT_PROBE_READ_TIMEOUT_SECONDS = float(
+    os.environ.get("STELLAR_EXPORTER_EXPORT_PROBE_READ_TIMEOUT_SECONDS", "30")
+)
 TRANSIENT_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 
 
@@ -114,6 +120,34 @@ class StellarClient:
         self._jwt: str | None = None
         self._jwt_obtained_at = 0.0
         self._jwt_lock = asyncio.Lock()
+        self._shared_client: httpx.AsyncClient | None = None
+
+    async def __aenter__(self):
+        if self._shared_client is None:
+            self._shared_client = httpx.AsyncClient(
+                verify=self.verify_tls,
+                timeout=httpx.Timeout(QUERY_READ_TIMEOUT_SECONDS, connect=15.0),
+                transport=self.transport,
+            )
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        client = self._shared_client
+        self._shared_client = None
+        if client is not None:
+            await client.aclose()
+
+    @asynccontextmanager
+    async def _client_scope(self, timeout: httpx.Timeout):
+        if self._shared_client is not None:
+            yield self._shared_client
+            return
+        async with httpx.AsyncClient(
+            verify=self.verify_tls,
+            timeout=timeout,
+            transport=self.transport,
+        ) as client:
+            yield client
 
     async def _get_access_token(
         self,
@@ -260,11 +294,7 @@ class StellarClient:
         force_refresh = False
         last_connection_error: Exception | None = None
 
-        async with httpx.AsyncClient(
-            verify=self.verify_tls,
-            timeout=timeout,
-            transport=self.transport,
-        ) as client:
+        async with self._client_scope(timeout) as client:
             for attempt in range(QUERY_RETRY_ATTEMPTS):
                 try:
                     jwt = await self._get_access_token(
@@ -279,6 +309,7 @@ class StellarClient:
                             "Accept": "application/json",
                             "Content-Type": "application/json",
                         },
+                        timeout=timeout,
                     )
                 except (httpx.RequestError, StellarConnectionError) as exc:
                     last_connection_error = exc
@@ -343,16 +374,21 @@ class StellarClient:
     async def search(self, index: str, body: dict[str, Any]) -> dict[str, Any]:
         encoded_index = quote(index, safe="*,-._")
         url = f"{self.host}/connect/api/data/{encoded_index}/_search"
-        timeout = httpx.Timeout(60.0, connect=15.0)
+        is_export_probe = (
+            int(body.get("size") or 0) > 0
+            and not bool(body.get("track_total_hits", False))
+        )
+        read_timeout = (
+            EXPORT_PROBE_READ_TIMEOUT_SECONDS
+            if is_export_probe
+            else QUERY_READ_TIMEOUT_SECONDS
+        )
+        timeout = httpx.Timeout(read_timeout, connect=15.0)
         response: httpx.Response | None = None
         force_refresh = False
         last_connection_error: Exception | None = None
 
-        async with httpx.AsyncClient(
-            verify=self.verify_tls,
-            timeout=timeout,
-            transport=self.transport,
-        ) as client:
+        async with self._client_scope(timeout) as client:
             for attempt in range(QUERY_RETRY_ATTEMPTS):
                 try:
                     jwt = await self._get_access_token(
@@ -371,6 +407,7 @@ class StellarClient:
                             url,
                             headers=headers,
                             params=self._user_scope_search_params(body),
+                            timeout=timeout,
                         )
                     else:
                         response = await client.request(
@@ -378,13 +415,11 @@ class StellarClient:
                             url,
                             headers=headers,
                             json=self._tenant_scoped_body(body),
+                            timeout=timeout,
                         )
                 except (httpx.RequestError, StellarConnectionError) as exc:
                     last_connection_error = exc
-                    if (
-                        isinstance(exc, httpx.ReadTimeout)
-                        and int(body.get("size") or 0) > 0
-                    ):
+                    if isinstance(exc, httpx.ReadTimeout) and is_export_probe:
                         raise StellarReadTimeoutError(
                             "Stellar Cyber did not return the document response before the read timeout. "
                             "The Exporter will retry this range using smaller adaptive time slices."
