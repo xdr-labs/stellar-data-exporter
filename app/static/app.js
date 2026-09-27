@@ -490,6 +490,7 @@ async function refreshIndexPlan() {
   try {
     const plan = await api("/api/query/index-plan", {
       method: "POST",
+      retryTransient: true,
       body: JSON.stringify(params),
     });
     if (requestId !== state.indexPlanRequest || key !== currentIndexPlanKey()) return;
@@ -770,6 +771,7 @@ async function getSftpHostKey() {
     setStatus("sftpHostKeyStatus", "Fetching the SSH host key…");
     const result = await api("/api/destination/sftp-host-key", {
       method: "POST",
+      retryTransient: true,
       body: JSON.stringify(endpoint),
     });
     state.sftpHostKeyCandidate = {
@@ -1193,6 +1195,8 @@ function setBusy(button, busy, busyText) {
   }
 }
 
+const TRANSIENT_EXPORTER_STATUSES = new Set([502, 503, 504]);
+
 function apiErrorMessage(body, status) {
   const detail = body?.detail ?? body?.message ?? body;
   if (typeof detail === "string" && detail.trim()) return detail;
@@ -1215,25 +1219,57 @@ function apiErrorMessage(body, status) {
 
   if (status === 401) return "Authentication failed. Check the selected credential type and credential.";
   if (status === 403) return "Connected, but the account does not have permission to query the selected data sources.";
-  if (status >= 500) return "Connection failed. Check the host address, network path, and TLS settings.";
+  if (TRANSIENT_EXPORTER_STATUSES.has(status)) {
+    return `Exporter backend is temporarily unavailable (HTTP ${status}). This usually means the Exporter service or reverse proxy is restarting or unreachable, not that the Stellar Cyber credential is invalid. Wait a moment and retry.`;
+  }
+  if (status >= 500) {
+    return `Exporter returned an internal service error (HTTP ${status}). Retry the request; if it persists, check the Exporter server logs.`;
+  }
   return `Request failed (HTTP ${status}).`;
 }
 
 async function api(path, options = {}) {
-  let response;
-  try {
-    response = await fetch(path, {
-      headers: {"Content-Type": "application/json", ...(options.headers || {})},
-      ...options,
-    });
-  } catch (error) {
-    throw new Error("The exporter service could not be reached. Check the server connection.");
-  }
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
+  const {
+    retryTransient: retryTransientOption,
+    retryAttempts = 4,
+    retryBaseDelayMs = 300,
+    ...fetchOptions
+  } = options;
+  const method = String(fetchOptions.method || "GET").toUpperCase();
+  const retryTransient = retryTransientOption ?? method === "GET";
+  const attempts = retryTransient ? Math.max(1, Number(retryAttempts) || 1) : 1;
+  const requestOptions = {
+    ...fetchOptions,
+    headers: {"Content-Type": "application/json", ...(fetchOptions.headers || {})},
+  };
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(path, requestOptions);
+    } catch (error) {
+      if (attempt + 1 < attempts) {
+        await wait(retryBaseDelayMs * (2 ** attempt));
+        continue;
+      }
+      throw new Error("The exporter service could not be reached. The Exporter backend or reverse proxy may be restarting or offline. Wait a moment and retry.");
+    }
+
+    const body = await response.json().catch(() => ({}));
+    if (response.ok) return body;
+
+    if (
+      retryTransient
+      && TRANSIENT_EXPORTER_STATUSES.has(response.status)
+      && attempt + 1 < attempts
+    ) {
+      await wait(retryBaseDelayMs * (2 ** attempt));
+      continue;
+    }
     throw new Error(apiErrorMessage(body, response.status));
   }
-  return body;
+
+  throw new Error("The exporter service could not be reached after automatic retries.");
 }
 
 function renderPreview(rows) {
@@ -1548,6 +1584,7 @@ async function testConnection() {
     setStatus("connectionStatus", "Testing connection…");
     const result = await api("/api/connection/test", {
       method: "POST",
+      retryTransient: true,
       body: JSON.stringify({
         host: $("host").value.trim(),
         auth_mode: authMode,
@@ -1648,6 +1685,7 @@ async function previewQuery() {
     setStatus("queryStatus", "Running preview…");
     const result = await api("/api/query/preview", {
       method: "POST",
+      retryTransient: true,
       body: JSON.stringify(basePayload()),
     });
     state.previewTotal = result.total;
@@ -2073,6 +2111,7 @@ async function runExport() {
     setStatus("runStatus", "Checking matched record count for the selected tenant before export…");
     const countResult = await api("/api/query/count", {
       method: "POST",
+      retryTransient: true,
       body: JSON.stringify(basePayload()),
     });
     const matchedTotal = Number(countResult.total || 0);
