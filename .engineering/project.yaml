@@ -10,6 +10,8 @@ project:
   name: stellar-data-exporter
   type: web-app
   maturity: development
+  user_facing: true
+  primary_user_surface: browser
 domains:
 - core
 platforms:

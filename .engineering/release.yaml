@@ -21,3 +21,19 @@ blockers:
   p1: true
   user_blocking_p2: true
 execution_context: github-hosted
+human_equivalent_user_tests_required: true
+human_equivalent_user_tests:
+  executor: EXECUTION_PROFILE
+  actual_user_surface_required: true
+  primary_user_surface: browser
+  actual_browser_process_required: true
+  same_candidate_required: true
+  ci_contract_validation_only: true
+  surface_reconciliation:
+    mandatory: true
+    contract: docs/ENGINEERING_SURFACE_RECONCILIATION.md
+    minimum_passes: 1
+  full_user_e2e:
+    mandatory: true
+    contract: docs/ENGINEERING_FULL_USER_E2E.md
+    minimum_passes: 1
