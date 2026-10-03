@@ -11,3 +11,6 @@ recursive-include docs *
 recursive-include scripts *.sh
 recursive-include schemas *.json
 recursive-include tools *.py
+include .engineering/execution-profile.yaml
+include .engineering/governance-migration.yaml
+include .engineering/requirements-engineering-system.txt

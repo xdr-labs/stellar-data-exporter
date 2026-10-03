@@ -5,11 +5,20 @@ from app import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BASELINE = "c16edb8c2a86f194f21c5ba16e5f75673a15ba5c"
-
-
 def read(relative: str) -> str:
     return (ROOT / relative).read_text()
+
+
+def yaml_scalar(text: str, key: str) -> str:
+    prefix = f"{key}:"
+    for raw in text.splitlines():
+        line = raw.lstrip()
+        if line.startswith(prefix):
+            return line.split(":", 1)[1].strip().strip("\"'")
+    raise AssertionError(f"missing YAML scalar: {key}")
+
+
+BASELINE = yaml_scalar(read(".engineering/project.yaml"), "baseline")
 
 
 def test_release_profile_requires_preflight_and_artifact_hashes():
@@ -18,11 +27,11 @@ def test_release_profile_requires_preflight_and_artifact_hashes():
     assert "exact_head_required: true" in profile
     assert "preflight_required: true" in profile
     assert "artifact_hash_required: true" in profile
-    assert 'preflight_command: "scripts/release-preflight.sh"' in profile
-    assert 'qualification_command: "scripts/release-qualify.sh dist"' in profile
+    assert yaml_scalar(profile, "preflight_command") == "scripts/release-preflight.sh"
+    assert yaml_scalar(profile, "qualification_command") == "scripts/release-qualify.sh dist"
     assert (
-        'artifact_hash_command: "scripts/hash-release-artifacts.sh dist dist/SHA256SUMS"'
-        in profile
+        yaml_scalar(profile, "artifact_hash_command")
+        == "scripts/hash-release-artifacts.sh dist dist/SHA256SUMS"
     )
 
 

@@ -13,6 +13,9 @@ SDIST_REQUIRED = {
     ".engineering/project.yaml",
     ".engineering/release.yaml",
     ".engineering/tests.yaml",
+    ".engineering/execution-profile.yaml",
+    ".engineering/governance-migration.yaml",
+    ".engineering/requirements-engineering-system.txt",
     "deploy/nginx/stellar-data-exporter.conf",
     "deploy/systemd/stellar-data-exporter.service",
     "docs/PRODUCTION.md",
@@ -22,7 +25,14 @@ SDIST_REQUIRED = {
     "scripts/release-qualify.sh",
     "scripts/hash-release-artifacts.sh",
     "schemas/runtime-contract.schema.json",
+    "schemas/execution-profile.schema.json",
+    "schemas/coordinator-decision.schema.json",
     "tools/runtime-contract.py",
+    "tools/execution_profile.py",
+    "tools/context_epoch.py",
+    "tools/governance_floor.py",
+    "tools/coordinator.py",
+    "tools/work_admission.py",
 }
 
 WHEEL_REQUIRED = {
