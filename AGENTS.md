@@ -22,6 +22,7 @@ When resuming a workstream, resolve this repository first, load only its single 
 
 ## Execution rules
 
+- **Execute useful work continuously.** Before any implementation starts or resumes, require a fresh authoritative Work Packet read and `python3 tools/context_epoch.py packet-lint` PASS; a BLOCK result such as `IMPLEMENTER_INVALID` makes the packet non-runnable and forbids implementation/session launch. Implement in coherent small/medium batches, validate locally with the cheapest relevant tests, and keep going while a safe authorized next action exists. Use fast CI for quick integration feedback when useful; reserve full qualification/release CI for a stable candidate. If a workstream is waiting on machine-observable CI/review/deploy or another external condition, record/yield that wait and return to repository-level scheduling; switch to the highest-priority dependency-eligible independent ACTIVE Work Packet/worktree when safe instead of polling or stopping. For a repository-level continue/resume with no branch/workstream named, choose the single trusted runnable packet marked as the current implementation lane (for example QUEUE_STATE=IMPLEMENTATION/IMPLEMENTING); yielded/waiting/deferred predecessor packets must not compete with it. When a successor starts while predecessor integration/qualification is intentionally deferred, pause/yield the predecessor instead of leaving multiple equivalent ACTIVE implementation candidates. The single-matching-ACTIVE-packet rule selects one packet for the current branch/workstream; it does not serialize unrelated repository work behind a waiting packet. Once one runnable packet is selected and authorized, a progress/status message alone is not execution: begin the first concrete repository action in the same turn and continue until a real stop condition. Stop only for a real owner decision/credential, an irreconcilable blocker, a status-only request, or a completed bounded outcome.
 - Classify the change and affected domains/contracts/security/operations.
 - Apply `standards/DESIGN.md` for material design-bearing changes.
 - Apply `standards/OPERATIONS.md` for production-impacting failures and preserve evidence before mutation.
@@ -39,6 +40,6 @@ When resuming a workstream, resolve this repository first, load only its single 
 
 For adoption or managed upgrades, follow `standards/ADOPTION.md`, preserve project-specific/stricter rules, and qualify the result deterministically.
 
-Adopted projects pin `engineering_system.version` and an immutable `engineering_system.baseline` SHA in `.engineering/project.yaml`. Managed upgrades must keep that version/baseline identity aligned with the canonical Engineering System release (currently 1.6.5) rather than assuming same-major pins are current.
+Adopted projects pin `engineering_system.version` and an immutable `engineering_system.baseline` SHA in `.engineering/project.yaml`. Managed upgrades must keep that version/baseline identity aligned with the canonical Engineering System release (currently 1.7.0) rather than assuming same-major pins are current.
 
 Tool-specific adapters may change syntax but must not weaken these rules.

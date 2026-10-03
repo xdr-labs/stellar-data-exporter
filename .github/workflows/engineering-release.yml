@@ -1,17 +1,17 @@
-name: Engineering Release
+name: Engineering Release Contract
 
 on:
   workflow_dispatch:
     inputs:
       expected_sha:
-        description: Exact candidate SHA to qualify
+        description: Exact candidate SHA
         required: true
         type: string
       phase:
         description: Release contract phase
         required: true
-        default: qualify
         type: choice
+        default: qualify
         options:
           - qualify
           - post-release
@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   release-contract:
-    uses: datarelay-labs/engineering-system/.github/workflows/release-contract.yml@c16edb8c2a86f194f21c5ba16e5f75673a15ba5c
+    uses: datarelay-labs/engineering-system/.github/workflows/release-contract.yml@c50d2a3b7540dcc2899d752573d0634da78dd2bc
     with:
       expected_sha: ${{ inputs.expected_sha }}
       phase: ${{ inputs.phase }}

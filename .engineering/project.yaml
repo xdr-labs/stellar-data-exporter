@@ -1,30 +1,26 @@
 engineering_system:
-  version: "1.6.5"
+  version: 1.7.0
   mode: adopted
-  baseline: "c16edb8c2a86f194f21c5ba16e5f75673a15ba5c"
-  ci_mode: "shared"
+  baseline: c50d2a3b7540dcc2899d752573d0634da78dd2bc
+  ci_mode: shared
   native_ci_workflows: []
-  merge_gate_status: "advisory"
-
+  merge_gate_status: advisory
 project:
-  name: "stellar-data-exporter"
-  type: "web-app"
-  maturity: "development"
-
+  name: stellar-data-exporter
+  type: web-app
+  maturity: development
 domains:
-  - "core"
-
+- core
 platforms:
-  - "linux"
-
+- linux
 operations:
   production_oriented: false
   runbook_required: false
   incident_response_required: false
   persistent_state: true
   runbook_paths: []
-  health_command: ""
-  backup_command: "scripts/backup-state.sh /var/lib/stellar-data-exporter /var/backups/stellar-data-exporter-state.tgz"
-  restore_test_command: "scripts/restore-test.sh /var/backups/stellar-data-exporter-state.tgz"
-  upgrade_command: ""
-  rollback_command: ""
+  health_command: ''
+  backup_command: scripts/backup-state.sh /var/lib/stellar-data-exporter /var/backups/stellar-data-exporter-state.tgz
+  restore_test_command: scripts/restore-test.sh /var/backups/stellar-data-exporter-state.tgz
+  upgrade_command: ''
+  rollback_command: ''
