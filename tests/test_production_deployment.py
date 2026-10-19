@@ -118,11 +118,10 @@ def test_production_runbook_preserves_encryption_key_and_private_backend():
     env_example = read("deploy/systemd/exporter.env.example")
 
     assert "TCP 8787 must remain loopback-only" in runbook
-    assert "application HTTP Basic authentication" in runbook
-    assert "STELLAR_EXPORTER_UI_USERNAME" in runbook
-    assert "STELLAR_EXPORTER_UI_PASSWORD" in runbook
-    assert "STELLAR_EXPORTER_UI_USERNAME" in env_example
-    assert "STELLAR_EXPORTER_UI_PASSWORD" in env_example
+    assert "no separate Exporter login" in runbook
+    assert "HTTP Basic Auth" not in runbook
+    assert "STELLAR_EXPORTER_UI_" not in runbook
+    assert "STELLAR_EXPORTER_UI_" not in env_example
     assert "schedule.key" in runbook
     assert "Losing this key" in runbook
     assert "same `schedule.key`" in runbook

@@ -60,7 +60,7 @@ scenarios:
   - scheduled export payloads remain encrypted at rest, use remote destinations only,
     persist across restart, and advance contiguous windows only after successful runs
   - production service binds Uvicorn to loopback only and deployment templates require
-    TLS, authentication, API rate limiting, restrictive systemd sandboxing, and protected
+    TLS, no separate account/password gate, API rate limiting, restrictive systemd sandboxing, and protected
     persistent state
   release_gate: true
 - id: RELEASE-ARTIFACT-001
