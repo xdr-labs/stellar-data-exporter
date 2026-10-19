@@ -26,43 +26,20 @@ def query_payload():
     }
 
 
-def test_web_basic_auth_protects_ui_and_api_but_not_health(monkeypatch):
-    monkeypatch.delenv("STELLAR_EXPORTER_UI_AUTH_DISABLED", raising=False)
-    monkeypatch.setenv("STELLAR_EXPORTER_WEB_USERNAME", "test-user")
-    monkeypatch.setenv("STELLAR_EXPORTER_WEB_PASSWORD", "test-password")
+def test_ui_and_read_only_api_need_no_exporter_login_even_with_legacy_auth_env(monkeypatch):
+    # Legacy Exporter account variables must not restore an obsolete Basic Auth gate.
+    monkeypatch.setenv("STELLAR_EXPORTER_UI_AUTH_DISABLED", "0")
+    monkeypatch.setenv("STELLAR_EXPORTER_UI_USERNAME", "old-user")
+    monkeypatch.setenv("STELLAR_EXPORTER_UI_PASSWORD", "old-password")
+    monkeypatch.setenv("STELLAR_EXPORTER_WEB_USERNAME", "old-user")
+    monkeypatch.setenv("STELLAR_EXPORTER_WEB_PASSWORD", "old-password")
     client = TestClient(app)
 
-    health = client.get("/api/health")
-    assert health.status_code == 200
-
-    unauthenticated = client.get("/")
-    assert unauthenticated.status_code == 401
-    assert unauthenticated.headers["www-authenticate"].startswith("Basic ")
-
-    wrong = client.get("/", auth=("test-user", "wrong"))
-    assert wrong.status_code == 401
-
-    authenticated = client.get("/", auth=("test-user", "test-password"))
-    assert authenticated.status_code == 200
-    assert "Stellar Cyber Data Exporter" in authenticated.text
-
-
-def test_web_auth_defaults_to_stellar_credentials(monkeypatch):
-    monkeypatch.delenv("STELLAR_EXPORTER_UI_AUTH_DISABLED", raising=False)
-    monkeypatch.delenv("STELLAR_EXPORTER_UI_USERNAME", raising=False)
-    monkeypatch.delenv("STELLAR_EXPORTER_UI_PASSWORD", raising=False)
-    monkeypatch.delenv("STELLAR_EXPORTER_WEB_USERNAME", raising=False)
-    monkeypatch.delenv("STELLAR_EXPORTER_WEB_PASSWORD", raising=False)
-    client = TestClient(app)
-
-    unauthenticated = client.get("/")
-    assert unauthenticated.status_code == 401
-
-    wrong = client.get("/", auth=("stellar", "wrong"))
-    assert wrong.status_code == 401
-
-    authenticated = client.get("/", auth=("stellar", "stellar"))
-    assert authenticated.status_code == 200
+    for path in ("/", "/api/health", "/api/data-sources", "/api/export/history", "/api/schedules"):
+        result = client.get(path)
+        assert result.status_code == 200, (path, result.text)
+        assert "www-authenticate" not in result.headers
+    assert "Stellar Cyber Data Exporter" in client.get("/").text
 
 
 def test_count_preflight_is_tenant_scoped_and_returns_critical_warning(monkeypatch):

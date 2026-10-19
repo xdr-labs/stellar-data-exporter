@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import json
 import logging
 import os
 import re
-import secrets
 import subprocess
 import sys
 import tempfile
@@ -21,8 +19,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 from . import __version__
 from .destinations import (
@@ -227,57 +225,6 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Stellar Data Exporter", version=__version__, lifespan=lifespan)
-
-
-def _web_auth_credentials() -> tuple[str, str] | None:
-    disabled = os.environ.get("STELLAR_EXPORTER_UI_AUTH_DISABLED", "").strip().lower()
-    if disabled in {"1", "true", "yes", "on"}:
-        return None
-
-    username = (
-        os.environ.get("STELLAR_EXPORTER_UI_USERNAME")
-        or os.environ.get("STELLAR_EXPORTER_WEB_USERNAME")
-        or "stellar"
-    ).strip()
-    password = (
-        os.environ.get("STELLAR_EXPORTER_UI_PASSWORD")
-        or os.environ.get("STELLAR_EXPORTER_WEB_PASSWORD")
-        or "stellar"
-    )
-    return username, password
-
-
-@app.middleware("http")
-async def require_web_basic_auth(request: Request, call_next):
-    if request.url.path == "/api/health":
-        return await call_next(request)
-    credentials = _web_auth_credentials()
-    if credentials is None:
-        return await call_next(request)
-    if not credentials[0] or not credentials[1]:
-        return PlainTextResponse(
-            "Web authentication is not configured.",
-            status_code=503,
-        )
-
-    header = request.headers.get("authorization", "")
-    username = password = ""
-    if header.lower().startswith("basic "):
-        try:
-            decoded = base64.b64decode(header.split(" ", 1)[1], validate=True).decode("utf-8")
-            username, password = decoded.split(":", 1)
-        except (ValueError, UnicodeDecodeError):
-            username = password = ""
-
-    expected_username, expected_password = credentials
-    valid = secrets.compare_digest(username, expected_username) and secrets.compare_digest(password, expected_password)
-    if not valid:
-        return PlainTextResponse(
-            "Authentication required",
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="Stellar Data Exporter", charset="UTF-8"'},
-        )
-    return await call_next(request)
 
 
 def client_for(

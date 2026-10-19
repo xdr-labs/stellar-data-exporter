@@ -549,33 +549,6 @@ def test_query_requires_tenant_selection():
     assert "tenant_id" in response.text
 
 
-def test_web_basic_auth_protects_ui_and_api_but_not_health(monkeypatch):
-    monkeypatch.setenv("STELLAR_EXPORTER_UI_AUTH_DISABLED", "0")
-    monkeypatch.setenv("STELLAR_EXPORTER_UI_USERNAME", "test-ui-user")
-    monkeypatch.setenv("STELLAR_EXPORTER_UI_PASSWORD", "test-ui-password")
-    client = TestClient(app)
-
-    health = client.get("/api/health")
-    assert health.status_code == 200
-
-    blocked_ui = client.get("/")
-    assert blocked_ui.status_code == 401
-    assert blocked_ui.headers["www-authenticate"].startswith("Basic ")
-
-    blocked_api = client.get("/api/data-sources")
-    assert blocked_api.status_code == 401
-
-    wrong = client.get("/", auth=("test-ui-user", "wrong"))
-    assert wrong.status_code == 401
-
-    allowed_ui = client.get("/", auth=("test-ui-user", "test-ui-password"))
-    assert allowed_ui.status_code == 200
-    assert "Stellar Cyber Data Exporter" in allowed_ui.text
-
-    allowed_api = client.get("/api/data-sources", auth=("test-ui-user", "test-ui-password"))
-    assert allowed_api.status_code == 200
-
-
 def test_sftp_host_key_lookup_endpoint(monkeypatch):
     async def fake_host_key(host, port):
         assert host == "sftp.example.test"
