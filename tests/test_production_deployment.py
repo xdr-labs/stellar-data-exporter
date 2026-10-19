@@ -60,7 +60,7 @@ def test_web_assets_are_packaged_with_the_application():
     package_data = config["tool"]["setuptools"]["package-data"]
 
     assert "static/*" in package_data["app"]
-    for filename in ("index.html", "app.js", "styles.css", "stellar-cyber-logo.svg"):
+    for filename in ("index.html", "app.js", "i18n.js", "styles.css", "stellar-cyber-logo.svg"):
         assert (ROOT / "app" / "static" / filename).is_file()
 
 

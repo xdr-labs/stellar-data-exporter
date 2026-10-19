@@ -1446,6 +1446,11 @@ async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/i18n.js")
+async def i18n_js() -> FileResponse:
+    return FileResponse(STATIC_DIR / "i18n.js", media_type="application/javascript")
+
+
 @app.get("/app.js")
 async def app_js() -> FileResponse:
     return FileResponse(STATIC_DIR / "app.js", media_type="application/javascript")

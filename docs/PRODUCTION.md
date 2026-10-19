@@ -145,6 +145,7 @@ curl --fail https://exporter.example.com/
 Then verify in the browser:
 
 1. The browser loads the Exporter UI without an additional account/password prompt.
+   The English / 한국어 selector translates the interface without resetting input values; confirm the Korean preference survives a refresh.
 2. Basic and Advanced modes load without Exporter authentication.
 3. Connection Test succeeds against the intended Stellar Cyber instance and loads accessible tenants.
 4. Select exactly one tenant and confirm the summary shows that tenant.
