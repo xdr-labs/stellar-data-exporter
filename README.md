@@ -188,6 +188,14 @@ It can also:
 - suppress duplicates only when Stellar/Elasticsearch provides stable document identity
 - reject overlapping scheduled/advanced exports when configured
 
+## Language selection
+
+The top bar provides an **English / 한국어** language menu. The selection changes
+labels, help text, status messages, and common validation errors immediately
+without changing query input or export settings. It is remembered in browser
+`localStorage` and restored after refresh. Language preferences contain no API
+credentials and do not depend on an Exporter login.
+
 ## Security boundary
 
 - No separate Exporter login or HTTP Basic Auth is required for the UI and API. Visitors who can reach the service can view export history and schedules, operate jobs, and retrieve still-available browser download artifacts. Apply a network boundary if this is not acceptable.

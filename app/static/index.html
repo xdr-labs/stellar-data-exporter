@@ -19,6 +19,13 @@
       </div>
     </div>
     <div class="top-actions">
+      <label class="language-picker" for="uiLanguage">
+        <span>Language</span>
+        <select id="uiLanguage" aria-label="Language">
+          <option value="en">English</option>
+          <option value="ko">한국어</option>
+        </select>
+      </label>
       <div class="ui-mode-toggle" aria-label="Interface mode">
         <button id="basicMode" class="ui-mode active" type="button">Basic</button>
         <button id="advancedMode" class="ui-mode" type="button">Advanced</button>
@@ -616,6 +623,7 @@
   </div>
 
   <iframe id="downloadFrame" class="download-frame" title="download"></iframe>
+  <script src="/i18n.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
