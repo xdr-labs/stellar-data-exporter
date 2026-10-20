@@ -1,12 +1,12 @@
 engineering_system:
   version: 1.7.0
   mode: adopted
-  baseline: 2c73cdd52b98db4143b379730ee0c69d284f80e8
+  baseline: 141bd3fcad6f95d3a382e91fdc351ae0a54819a4
   ci_mode: shared
   native_ci_workflows: []
   merge_gate_status: advisory
-  policy_epoch: 19
-  governance_epoch: 0
+  policy_epoch: 26
+  governance_epoch: 1
 project:
   name: stellar-data-exporter
   type: web-app
