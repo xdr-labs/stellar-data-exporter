@@ -13,7 +13,7 @@ User
        - security headers
   -> 127.0.0.1:8787
   -> Stellar Data Exporter
-       - application HTTP Basic authentication
+       - no separate Exporter account/password prompt
        - tenant-scoped Stellar Cyber API access
        - S3/SFTP destinations
        - /var/lib/stellar-data-exporter persistent state
@@ -64,28 +64,16 @@ Use a CA-issued certificate for the production hostname. Direct local CLI runs g
 
 ## 3. Access boundary
 
-The exporter itself protects every UI/API route except `/api/health` with HTTP Basic Auth.
-The built-in development defaults are:
+The UI and API have no separate Exporter login, account, or HTTP Basic authentication.
+Stellar Cyber API credentials remain mandatory for an actual upstream connection.
+Interactive credentials are stored only in the current browser session after an
+explicit **Remember this session** action. They are not shared with other browsers.
+Scheduled remote exports store credentials encrypted with the schedule key.
 
-```text
-username: stellar
-password: stellar
-```
-
-For an Internet-reachable deployment, override both values in
-`/etc/stellar-data-exporter/exporter.env` and keep that file root-owned mode `0600`:
-
-```bash
-STELLAR_EXPORTER_UI_USERNAME=<username>
-STELLAR_EXPORTER_UI_PASSWORD=<strong-password>
-```
-
-Do not add a second independent Nginx Basic Auth layer unless it intentionally uses the same
-credentials and forwards the Authorization header. A second mismatched Basic Auth layer causes
-double prompts or backend HTTP 401 responses.
-
-`STELLAR_EXPORTER_UI_AUTH_DISABLED=1` is only for isolated test automation and must not be set
-on a production deployment.
+Anyone who can reach the service can view export history and schedule metadata,
+operate export jobs and retrieve still-retained browser download artifacts.
+If this visibility is inappropriate for a deployment, restrict access at the
+network or reverse-proxy boundary instead of inventing an Exporter user account.
 
 ## 4. Nginx
 
@@ -147,19 +135,18 @@ Validate the loopback service from the host:
 curl --fail http://127.0.0.1:8787/api/health
 ```
 
-Validate the public health endpoint and the authenticated application root:
+Validate the public health endpoint and the application root without credentials:
 
 ```bash
 curl --fail https://exporter.example.com/api/health
-curl --fail --user stellar:stellar https://exporter.example.com/
+curl --fail https://exporter.example.com/
 ```
-
-Use the configured production username/password instead of the defaults when overrides are set.
 
 Then verify in the browser:
 
-1. The browser requires HTTP Basic Auth before the UI loads.
-2. Basic and Advanced modes load after authentication.
+1. The browser loads the Exporter UI without an additional account/password prompt.
+   The English / 한국어 selector translates the interface without resetting input values; confirm the Korean preference survives a refresh.
+2. Basic and Advanced modes load without Exporter authentication.
 3. Connection Test succeeds against the intended Stellar Cyber instance and loads accessible tenants.
 4. Select exactly one tenant and confirm the summary shows that tenant.
 5. Preview succeeds for a narrow range and returned records belong to the selected tenant.

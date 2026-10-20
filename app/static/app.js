@@ -1191,7 +1191,7 @@ function setStatus(id, message, type = "") {
 
 function setBusy(button, busy, busyText) {
   if (busy) {
-    button.dataset.original = button.textContent;
+    button.dataset.original = window.ExporterI18n?.sourceText(button) || button.textContent;
     button.textContent = busyText;
     button.disabled = true;
   } else {

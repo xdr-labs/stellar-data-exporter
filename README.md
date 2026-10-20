@@ -112,9 +112,9 @@ https://<exporter-host-ip>:8787
 
 For example, if the exporter host is `192.168.1.50`, open `https://192.168.1.50:8787`.
 
-The application requires HTTP Basic Auth on the UI and API. The default login is
-`stellar` / `stellar`. Override it with `STELLAR_EXPORTER_UI_USERNAME` and
-`STELLAR_EXPORTER_UI_PASSWORD` when needed.
+The Exporter UI opens without a separate account or password. To access upstream
+Stellar Cyber data, enter your own Stellar Cyber API credentials in the browser.
+**Remember this session** keeps those credentials in this browser session only.
 
 Because the automatically generated local certificate is self-signed, a browser can show a certificate warning the first time. The connection is still HTTPS encrypted. For a trusted browser certificate, supply your own certificate with `--ssl-keyfile` and `--ssl-certfile`.
 
@@ -188,18 +188,24 @@ It can also:
 - suppress duplicates only when Stellar/Elasticsearch provides stable document identity
 - reject overlapping scheduled/advanced exports when configured
 
+## Language selection
+
+The top bar provides an **English / 한국어** language menu. The selection changes
+labels, help text, status messages, and common validation errors immediately
+without changing query input or export settings. It is remembered in browser
+`localStorage` and restored after refresh. Language preferences contain no API
+credentials and do not depend on an Exporter login.
+
 ## Security boundary
 
-- The UI and API require HTTP Basic Auth by default; only `/api/health` is unauthenticated.
-- The development login defaults to `stellar` / `stellar`; override it with `STELLAR_EXPORTER_UI_USERNAME` and `STELLAR_EXPORTER_UI_PASSWORD` before production exposure.
+- No separate Exporter login or HTTP Basic Auth is required for the UI and API. Visitors who can reach the service can view export history and schedules, operate jobs, and retrieve still-available browser download artifacts. Apply a network boundary if this is not acceptable.
 - Stellar Cyber credentials are used only after the user selects exactly one accessible tenant; Preview, count, export, resume, and schedules remain tenant-scoped.
-- Interactive Stellar Cyber credentials are never stored as a shared server-side connection. **Remember this session** stores Host/Auth/Credential/TLS/Tenant only in browser `sessionStorage`; it survives refresh in that browser session, is not stored on the Exporter server, is not shared with other browsers/devices, and disappears when that browser session ends.
+- Interactive Stellar Cyber credentials are never stored as a shared server-side connection. **Remember this session** stores Host/Auth/Credential/TLS/Tenant only in browser sessionStorage; it survives refresh in that browser session, is not stored on the Exporter server, is not shared with other browsers/devices, and disappears when that browser session ends.
 - **Forget session** removes the browser-session copy and clears the visible Host, credential, tenant, and connection results from the page.
 - Interactive export credentials are handed to the detached worker through a one-shot stdin pipe. They are not stored in SQLite job history and are not placed on the worker command line.
 - Credentials are excluded from browser-saved export profiles and persistent job history.
 - TLS verification is enabled by default.
 - Scheduled remote exports require encrypted credential storage; provide a production master key when using this feature.
-- The shared Basic Auth gate is not a per-user authorization or multi-user isolation layer.
 - Do not expose the development Uvicorn listener directly to the public Internet.
 
 For production-oriented Nginx/systemd guidance, see [docs/PRODUCTION.md](docs/PRODUCTION.md).
